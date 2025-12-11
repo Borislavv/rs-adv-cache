@@ -156,7 +156,7 @@ cache:
 ---
 
 ## Endpoints (runtime control plane)
-- Main: `GET /{any:*}`
+- Main: `GET /*`
 - Health: `GET /k8s/probe`
 - Metrics: `GET /metrics` (Prometheus/VictoriaMetrics)
 - Bypass: `/advcache/bypass`, `/on`, `/off`
