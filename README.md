@@ -86,7 +86,6 @@ cache:
     enabled: true
     service_name: adv_cache
     service_version: dev
-    service_tenant: star
     exporter: http
     endpoint: 127.0.0.1:4318     # <-- CHANGEME: your OTEL Collector (http/4318 or grpc/4317)
     insecure: true
