@@ -160,23 +160,4 @@ impl Governor for Orchestrator {
             Ok(())
         }
     }
-
-    fn stop(&self) {
-        let srvs = self.srvs_sync.lock().unwrap();
-        let handle = tokio::runtime::Handle::current();
-        for srv in srvs.values() {
-            let transport = srv.transport();
-            let _srv_name = srv.name().to_string();
-            let result = std::thread::scope(|scope| {
-                scope.spawn(|| {
-                    handle.block_on(transport.stop())
-                }).join().unwrap()
-            });
-            if !result {
-                error!(srv = %srv.name(), "orchestrator: cannot stop, signal was not sent");
-            } else {
-                info!(srv = %srv.name(), "orchestrator: stopping...");
-            }
-        }
-    }
 }

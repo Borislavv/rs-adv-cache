@@ -1,5 +1,4 @@
 // Package orchestrator provides the Governor interface.
-//
 
 use anyhow::Result;
 
@@ -28,9 +27,5 @@ pub trait Governor: Send + Sync {
 
     /// Scales a service to n replicas.
     fn scale_to(&self, name: &str, n: usize) -> Result<()>;
-
-    /// Stops all services.
-    #[allow(dead_code)]
-    fn stop(&self);
 }
 
