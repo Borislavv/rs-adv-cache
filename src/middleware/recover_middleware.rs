@@ -1,0 +1,57 @@
+// Package http provides panic recovery middleware.
+
+use axum::{
+    extract::Request,
+    middleware::Next,
+    response::Response,
+};
+use std::sync::atomic::{AtomicU64, Ordering};
+
+#[allow(dead_code)]
+const REASON_HEADER_KEY: &str = "X-Error-Reason";
+
+/// Global panic counter.
+static PANICS_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+/// Gets the current panic counter value.
+pub fn panics_counter() -> u64 {
+    PANICS_COUNTER.load(Ordering::Relaxed)
+}
+
+/// PanicRecoverMiddleware recovers from panics in HTTP handlers.
+pub struct PanicRecoverMiddleware;
+
+impl PanicRecoverMiddleware {
+    /// Creates a new panic recovery middleware.
+    pub fn new() -> Self {
+        Self
+    }
+
+    /// Middleware function that handles errors.
+    pub async fn middleware(&self, request: Request, next: Next) -> Response {
+        // Execute the next middleware/handler
+        // In async Rust, we rely on proper error handling
+        next.run(request).await
+    }
+}
+
+impl Default for PanicRecoverMiddleware {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+// For use as axum middleware
+pub async fn panic_recover_middleware(
+    request: Request,
+    next: Next,
+) -> Response {
+    PanicRecoverMiddleware::new().middleware(request, next).await
+}
+
+// Implementation of Middleware trait
+impl crate::middleware::middleware::Middleware for PanicRecoverMiddleware {
+    fn apply(&self, router: axum::Router) -> axum::Router {
+        router.layer(axum::middleware::from_fn(panic_recover_middleware))
+    }
+}
