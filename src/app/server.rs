@@ -13,19 +13,6 @@ use crate::governor::Governor;
 use crate::storage::Storage;
 use crate::upstream::Upstream;
 
-/// Trait for HTTP server lifecycle management.
-#[allow(dead_code)]
-pub trait Http: Send + Sync {
-    /// Starts the HTTP server (blocking).
-    fn listen_and_serve(&self);
-    
-    /// Checks if the server is alive.
-    fn is_alive(&self) -> bool;
-    
-    /// Closes the HTTP server.
-    fn close(&self) -> Result<()>;
-}
-
 /// HTTP server implementation that wraps all dependencies.
 pub struct HttpServer {
     #[allow(dead_code)]
@@ -150,30 +137,3 @@ impl HttpServer {
         ]
     }
 }
-
-impl Http for HttpServer {
-    fn listen_and_serve(&self) {
-        // This is a blocking version for compatibility
-        // In practice, we'll use the async version
-        let rt = tokio::runtime::Runtime::new().unwrap();
-        rt.block_on(async {
-            if let Err(e) = HttpServer::listen_and_serve(self).await {
-                error!(
-                    component = "server",
-                    event = "serve_failed",
-                    error = %e,
-                    "server failed to serve"
-                );
-            }
-        });
-    }
-
-    fn is_alive(&self) -> bool {
-        HttpServer::is_alive(self)
-    }
-
-    fn close(&self) -> Result<()> {
-        HttpServer::close(self)
-    }
-}
-
