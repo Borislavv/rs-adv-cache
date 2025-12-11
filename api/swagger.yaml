@@ -1,0 +1,828 @@
+openapi: 3.0.3
+info:
+  title: API Documentation of AdvCache
+  description: "Community-maintained specification.\nNotes:\n  • All `/scale` endpoints\
+    \ accept query parameter `?to=<int>` (target replicas).\n  • `/advcache/invalidate`\
+    \ accepts any query params, optional `_path` query for path filtering, and `_remove`\
+    \ or `remove=true` query to remove entries instead of marking them.\n  • `/advcache/clear`\
+    \ is two-step: first call returns a token; second call requires `?token={token}`\
+    \ to execute.\n"
+  version: 0.3.2
+servers:
+  - url: http://localhost:8020
+tags:
+  - name: Bypass
+    description: Bypass/short-circuit cache behavior toggles.
+  - name: Clear
+    description: Cache clear orchestration endpoints.
+  - name: Config
+    description: Runtime configuration inspection.
+  - name: Entry
+    description: Single-entry cache operations.
+  - name: Eviction
+    description: Eviction workers, policies and scaling.
+  - name: HTTP Compression
+    description: Compression settings for HTTP responses.
+  - name: Invalidate
+    description: Invalidate related endpoints.
+  - name: K8s
+    description: Kubernetes probes and runtime health.
+  - name: Lifetime Manager
+    description: Background refresh/expiry and related controls.
+  - name: Traces/Metrics
+    description: Metrics and runtime signals for monitoring.
+  - name: Upstream
+    description: Upstream policy, quarantine and health checks.
+  - name: Admission
+    description: TinyLFU/Doorkeeper admission control toggles.
+components:
+  responses:
+    BadRequest:
+      description: Bad request.
+    Unauthorized:
+      description: Authentication required.
+    NotFound:
+      description: Resource not found.
+    TooManyRequests:
+      description: Rate limit exceeded.
+    InternalError:
+      description: Internal server error.
+paths:
+  /advcache/bypass:
+    get:
+      tags:
+        - Bypass
+      operationId: get_cache_bypass_BypassIs
+      summary: Bypass Is
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+      x-handlers:
+        - c.BypassIs
+  /advcache/bypass/off:
+    get:
+      tags:
+        - Bypass
+      operationId: get_cache_bypass_off_On
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+      x-handlers:
+        - c.On
+  /advcache/bypass/on:
+    get:
+      tags:
+        - Bypass
+      operationId: get_cache_bypass_on_Off
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+      x-handlers:
+        - c.Off
+  /advcache/clear:
+    get:
+      tags:
+        - Clear
+      operationId: get_cache_clear_HandleClear
+      summary: Two-step cache clear
+      description: 'First call without query parameters returns a one-time token.
+
+        Second call must pass the token as query parameter (?token={token}) to perform
+        the deletion.
+
+        '
+      parameters:
+        - name: token
+          in: query
+          required: false
+          description: One-time token obtained from the first step.
+          schema:
+            type: string
+      responses:
+        '200':
+          description: On first call returns a token; on second call (with token)
+            performs deletion.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - type: object
+                    properties:
+                      token:
+                        type: string
+                        description: One-time token to be used in the second call.
+                  - type: object
+                    properties:
+                      status:
+                        type: string
+                        example: cleared
+      x-handlers:
+        - c.HandleClear
+  /advcache/config:
+    get:
+      tags:
+        - Config
+      operationId: get_cache_config_ShowConfig
+      summary: Show Config
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+      x-handlers:
+        - c.ShowConfig
+  /advcache/entry:
+    get:
+      tags:
+        - Entry
+      operationId: get_cache_entry_Get
+      summary: Get
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+      x-handlers:
+        - c.Get
+  /advcache/eviction:
+    get:
+      tags:
+        - Eviction
+      operationId: get_cache_eviction_Get
+      summary: Get
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+      x-handlers:
+        - c.Get
+  /advcache/eviction/off:
+    get:
+      tags:
+        - Eviction
+      operationId: get_cache_eviction_off_Off
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+      x-handlers:
+        - c.Off
+  /advcache/eviction/on:
+    get:
+      tags:
+        - Eviction
+      operationId: get_cache_eviction_on_On
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+      x-handlers:
+        - c.On
+  /advcache/eviction/scale:
+    get:
+      tags:
+        - Eviction
+      operationId: get_cache_eviction_scale_Scale
+      summary: Scale
+      parameters:
+        - name: to
+          in: query
+          required: true
+          description: Target number of replicas to scale to.
+          schema:
+            type: integer
+            minimum: 0
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+      x-handlers:
+        - c.Scale
+  /advcache/http/compression:
+    get:
+      tags:
+        - HTTP Compression
+      operationId: get_cache_http_compression_Get
+      summary: Get
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+      x-handlers:
+        - c.Get
+  /advcache/http/compression/off:
+    get:
+      tags:
+        - HTTP Compression
+      operationId: get_cache_http_compression_off_Off
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+      x-handlers:
+        - c.Off
+  /advcache/http/compression/on:
+    get:
+      tags:
+        - HTTP Compression
+      operationId: get_cache_http_compression_on_On
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+      x-handlers:
+        - c.On
+  /advcache/invalidate:
+    get:
+      tags:
+        - Invalidate
+      operationId: get_cache_invalidate_Invalidate
+      summary: Invalidate
+      description: Any query parameters are available. For specify path use _path
+        query parameter. Use _remove query parameter to remove entries instead of marking them.
+      parameters:
+        - name: _path
+          in: query
+          required: false
+          description: Request path filter to scope invalidation (exact or prefix, depending
+            on implementation).
+          schema:
+            type: string
+        - name: _remove
+          in: query
+          required: false
+          description: If present, entries are removed; if absent, entries are only
+            marked as outdated.
+          schema:
+            type: string
+        - name: remove
+          in: query
+          required: false
+          description: Alternative to _remove. Set to "true" to remove entries instead of marking them.
+          schema:
+            type: string
+            enum: ["true"]
+      x-accepts-any-query: true
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+      x-handlers:
+        - c.Invalidate
+  /advcache/lifetime-manager:
+    get:
+      tags:
+        - Lifetime Manager
+      operationId: get_cache_lifetimemanager_Get
+      summary: Get
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+      x-handlers:
+        - c.Get
+  /advcache/lifetime-manager/off:
+    get:
+      tags:
+        - Lifetime Manager
+      operationId: get_cache_lifetimemanager_off_Off
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+      x-handlers:
+        - c.Off
+  /advcache/lifetime-manager/on:
+    get:
+      tags:
+        - Lifetime Manager
+      operationId: get_cache_lifetimemanager_on_On
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+      x-handlers:
+        - c.On
+  /advcache/lifetime-manager/policy:
+    get:
+      tags:
+        - Lifetime Manager
+      operationId: get_cache_lifetimemanager_policy_Policy
+      summary: Policy
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+      x-handlers:
+        - c.Policy
+  /advcache/lifetime-manager/policy/refresh:
+    get:
+      tags:
+        - Lifetime Manager
+      operationId: get_cache_lifetimemanager_policy_refresh_ToRefreshPolicy
+      summary: To Refresh Policy
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+      x-handlers:
+        - c.ToRefreshPolicy
+  /advcache/lifetime-manager/policy/remove:
+    get:
+      tags:
+        - Lifetime Manager
+      operationId: get_cache_lifetimemanager_policy_remove_ToRemovePolicy
+      summary: To Remove Policy
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+      x-handlers:
+        - c.ToRemovePolicy
+  /advcache/lifetime-manager/scale:
+    get:
+      tags:
+        - Lifetime Manager
+      operationId: get_cache_lifetimemanager_scale_Scale
+      summary: Scale
+      parameters:
+        - name: to
+          in: query
+          required: true
+          description: Target number of replicas to scale to.
+          schema:
+            type: integer
+            minimum: 0
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+      x-handlers:
+        - c.Scale
+  /advcache/upstream/policy:
+    get:
+      tags:
+        - Upstream
+      operationId: get_cache_upstream_policy_ShowPolicy
+      summary: Show Policy
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+      x-handlers:
+        - c.ShowPolicy
+  /advcache/upstream/policy/await:
+    get:
+      tags:
+        - Upstream
+      operationId: get_cache_upstream_policy_await_TurnOnAwaitPolicy
+      summary: Turn On Await Policy
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+      x-handlers:
+        - c.TurnOnAwaitPolicy
+  /advcache/upstream/policy/deny:
+    get:
+      tags:
+        - Upstream
+      operationId: get_cache_upstream_policy_deny_TurnOnDenyPolicy
+      summary: Turn On Deny Policy
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+      x-handlers:
+        - c.TurnOnDenyPolicy
+  /k8s/probe:
+    get:
+      tags:
+        - K8s
+      operationId: get_k8s_probe_Probe
+      summary: Probe
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+      x-handlers:
+        - c.Probe
+  /metrics:
+    get:
+      tags:
+        - Observability
+      operationId: get_metrics_Get
+      summary: Get
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+      x-handlers:
+        - m.Get
+  /advcache/traces:
+    get:
+      tags:
+        - Traces
+      operationId: get_cache_traces_Get
+      summary: Get
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+      x-handlers:
+        - c.Get
+  /advcache/traces/on:
+    get:
+      tags:
+        - Traces
+      operationId: get_cache_traces_on_On
+      summary: 'On'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+      x-handlers:
+        - c.On
+  /advcache/traces/off:
+    get:
+      tags:
+        - Traces
+      operationId: get_cache_traces_off_Off
+      summary: 'Off'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+      x-handlers:
+        - c.Off
+  /advcache/admission:
+    get:
+      tags:
+        - Admission
+      operationId: get_cache_admission_Get
+      summary: Get
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+      x-handlers:
+        - c.Get
+  /advcache/admission/on:
+    get:
+      tags:
+        - Admission
+      operationId: get_cache_admission_on_On
+      summary: 'On'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+      x-handlers:
+        - c.On
+  /advcache/admission/off:
+    get:
+      tags:
+        - Admission
+      operationId: get_cache_admission_off_Off
+      summary: 'Off'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+      x-handlers:
+        - c.Off
+  /advcache/lifetime-manager/rate:
+    get:
+      tags:
+        - Lifetime Manager
+      operationId: get_cache_lifetimemanager_rate_Rate
+      summary: Rate
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+      x-handlers:
+        - c.Rate
+      parameters:
+        - name: to
+          in: query
+          required: true
+          description: Target QPS rate limit to set.
+          schema:
+            type: integer
+            minimum: 0
+  /{any}:
+    get:
+      tags:
+        - Entry
+      operationId: get_any_MainRoute
+      summary: Main cache/proxy route
+      description: Matches any path segment (splat). In code this is `/{any:*}` and
+        serves as the primary cache/proxy endpoint.
+      parameters:
+        - name: any
+          in: path
+          required: true
+          description: Catch‑all path segment.
+          schema:
+            type: string
+      responses:
+        '200':
+          description: OK
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+      x-handlers:
+        - c.Index
