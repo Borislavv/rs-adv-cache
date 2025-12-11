@@ -1,0 +1,187 @@
+cache:
+  env: "dev"                     # Runtime environment label (e.g., dev/stage/prod). Used for logs/metrics tagging.
+  enabled: true                  # Master switch: enables the cache service.
+
+  logs:
+    level: "info"                # Log level: debug|info|warn|error. Prefer "info" in prod, "debug" for short bursts.
+
+  runtime:
+    num_cpus: 0                  # 0 = auto max avilable cores. Set explicit N to cap CPU usage.
+
+  api:
+    name: "adv_cache"            # Human-readable service name exposed in API/metrics.
+    port: "8020"                 # HTTP port for the admin/API endpoints.
+
+  upstream:
+    backend:
+      id: "mock_upstream"
+      enabled: true
+      policy: "await"
+      host: "localhost:8021"
+      scheme: "http"
+      rate: 1500000               # Per-backend RPS cap (token bucket or equivalent).
+      concurrency: 4096           # Max simultaneous requests.
+      timeout: "10s"              # Base timeout for upstream requests.
+      max_timeout: "1m"           # Hard cap if “slow path” header allows extending timeouts.
+      use_max_timeout_header: ""  # If non-empty, presence of this header lifts timeout to max_timeout.
+      healthcheck: "/healthcheck" # Liveness probe path; 2xx = healthy.
+
+  # Compression
+  # - Supported levels:
+  #   CompressNoCompression      = 0
+  #   CompressBestSpeed          = 1
+  #   CompressBestCompression    = 9
+  #   CompressDefaultCompression = 6
+  #   CompressHuffmanOnly        = -2
+  compression:
+    enabled: false
+    level: 1
+
+  data:
+    dump:
+      enabled: false              # Enable periodic dump to disk for warm restarts / backup.
+      dump_dir: "public/dump"     # Directory to store dump files.
+      dump_name: "cache.dump"     # Base filename (rotations will append indices/timestamps).
+      crc32_control_sum: true     # Validate dump integrity via CRC32 on load.
+      max_versions: 3             # Keep up to N rotated versions; older are deleted.
+      gzip: false                 # Compress dumps with gzip (smaller disk, more CPU).
+    mock:
+      enabled: false              # If true, prefill cache with mock data (for local testing).
+      length: 1000000             # Number of mock entries to generate.
+
+  storage:
+    mode: listing                 # Implementation of LRU algo through per-shard lists or Redis style sampling (values=sampling/listing).
+    size: 53687091200             # Max memory budget for storage (bytes). Here: 50 GiB.
+
+  admission:
+    enabled: false
+    capacity: 2000000               # global TinyLFU window size (how many recent events are tracked)
+    sample_multiplier: 4            # multiplies the window for aging (larger = slower aging)
+    shards: 256                     # number of independent shards (reduces contention)
+    min_table_len_per_shard: 65536  # minimum counter slots per shard (larger = fewer collisions)
+    door_bits_per_counter: 12       # bits per counter (2^bits-1 max count; larger = less saturation)
+
+  eviction:
+    enabled: true                 # Run background evictor to keep memory under configured thresholds.
+    replicas: 32                  # Number of evictor workers (>=1). Increase for large heaps / high churn.
+    soft_limit: 0.8               # At storage.size × soft_limit start gentle eviction + tighten admission.
+    hard_limit: 0.99              # At storage.size × hard_limit trigger minimal hot-path eviction; also set debug memory limit.
+    check_interval: "100ms"       # Defines how often the main evictor loop will check the memory limit.
+
+  lifetime:
+    enabled: true                 # Enable background refresh/remove for eligible entries.
+    ttl: "2h"                     # Default TTL for successful (200) responses unless overridden by rules.
+    on_ttl: refresh               # Values: 'remove' or 'refresh'. Defines behavior on TTL overcome.
+    beta: 0.35                    # Jitter factor (0..1) to spread refreshes/removes and prevent thundering herd.
+    rate: 1000                    # Global refresh/remove QPS cap to upstreams (safety valve).
+    replicas: 32                  # Number of workers (>=1).
+    coefficient: 0.25             # Start refresh/remove attempts at TTL × coefficient (e.g., 0.5 = at 50% of TTL).
+
+  traces:
+    enabled: true
+    service_name: "adv_cache"
+    service_version: "prod"
+    exporter: "http"              # "stdout" | "grpc" (OTLP/4317) | "http" (OTLP/4318)
+    endpoint: "localhost:4318"    # ignores when exporter=stdout
+    insecure: true                # should use TLS?
+    sampling_mode: "always"       # off | always | ratio
+    sampling_rate: 1.0            # 10% head-sampling (используется при mode=ratio)
+    export_batch_size: 512
+    export_batch_timeout: "3s"
+    export_max_queue: 1024
+
+  metrics:
+    enabled: true                 # Expose Prometheus-style metrics (and/or internal stats if logs.stats=true).
+
+  k8s:
+    probe:
+      timeout: "5s"               # Liveness/readiness probe timeout for the service endpoints.
+
+  rules:
+    /api/v1/user:                 # OnTTL: Will inherit global refresh unless overridden here.
+      cache_key:
+        query:                    # Include query params by prefix into the cache key (order-insensitive).
+          - user[id]
+          - domain
+          - language
+          - picked
+          - timezone
+        headers:                  # Include these request headers into the cache key (exact match).
+          - Accept-Encoding
+      cache_value:
+        headers:                  # Response headers to store/forward with cached value.
+          - Vary
+          - Server
+          - Content-Type
+          - Content-Length
+          - Content-Encoding
+          - Cache-Control
+          - X-Error-Reason
+
+    /api/v1/client:
+      cache_key:
+        query:
+          - user[id]
+          - domain
+          - language
+          - picked
+          - timezone
+        headers:
+          - Accept-Encoding
+      cache_value:
+        headers:
+          - Vary
+          - Server
+          - Content-Type
+          - Content-Length
+          - Content-Encoding
+          - Cache-Control
+          - X-Error-Reason
+
+    /api/v1/customer:
+      enabled: true
+      ttl: "4h"
+      beta: 0.4
+      coefficient: 0.3
+      cache_key:
+        query:
+          - user[id]
+          - domain
+          - language
+          - picked
+          - timezone
+        headers:
+          - Accept-Encoding
+      cache_value:
+        headers:
+          - Vary
+          - Server
+          - Content-Type
+          - Content-Length
+          - Content-Encoding
+          - Cache-Control
+          - X-Error-Reason
+
+    /api/v1/buyer:
+      enabled: true
+      ttl: "4h"
+      beta: 0.4
+      coefficient: 0.3
+      cache_key:
+        query:
+          - user[id]
+          - domain
+          - language
+          - picked
+          - timezone
+        headers:
+          - Accept-Encoding
+      cache_value:
+        headers:
+          - Vary
+          - Server
+          - Content-Type
+          - Content-Length
+          - Content-Encoding
+          - Cache-Control
+          - X-Error-Reason
