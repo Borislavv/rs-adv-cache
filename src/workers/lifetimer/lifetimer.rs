@@ -28,7 +28,7 @@ pub struct LifetimeManager {
     w_kill_tx: Arc<Mutex<Option<mpsc::Sender<()>>>>,
     w_tasks: Arc<Mutex<mpsc::Receiver<Entry>>>,
     w_tasks_tx: Arc<Mutex<mpsc::Sender<Entry>>>,
-    g_rate: Arc<governor::RateLimiter<governor::state::direct::NotKeyed, governor::state::InMemoryState, governor::clock::DefaultClock>>,
+    g_rate: Arc<Mutex<governor::RateLimiter<governor::state::direct::NotKeyed, governor::state::InMemoryState, governor::clock::DefaultClock>>>,
     inited: Arc<AtomicBool>,
     name: String,
     backend: Arc<dyn RefreshBackend>,
@@ -50,7 +50,7 @@ impl LifetimeManager {
 
         let rate_limit = cfg.get_freq().get_rate_limit() as u32;
         let quota = Quota::per_second(NonZeroU32::new(rate_limit).unwrap());
-        let g_rate = Arc::new(RateLimiter::direct(quota));
+        let g_rate = Arc::new(Mutex::new(RateLimiter::direct(quota)));
 
         let (w_kill_tx, w_kill_rx) = mpsc::channel(1);
         let (w_tasks_tx, w_tasks_rx) = mpsc::channel(cfg.get_freq().get_rate_limit());
@@ -209,7 +209,15 @@ impl LifetimeManager {
 
         if let Some(cfg) = cfg {
             // Store the new config
-            *self.cfg.write().await = cfg;
+            *self.cfg.write().await = cfg.clone();
+            
+            // Recreate rate limiter with new rate limit
+            use governor::{Quota, RateLimiter};
+            use std::num::NonZeroU32;
+            let rate_limit = cfg.get_freq().get_rate_limit() as u32;
+            let quota = Quota::per_second(NonZeroU32::new(rate_limit).unwrap());
+            *self.g_rate.lock().unwrap() = RateLimiter::direct(quota);
+            
             tracing::info!(name = %self.name, where = "reloading", "new config was applied");
         }
 
@@ -316,7 +324,10 @@ impl LifetimeManager {
                     } => {
                         if let Some(mut entry) = entry {
                             // Global rate limiting for refresh
-                            g_rate.until_ready().await;
+                            {
+                                let rate_limiter = g_rate.lock().unwrap();
+                                rate_limiter.until_ready().await;
+                            }
                             match backend.on_ttl(&mut entry).await {
                                 Ok(_) => {
                                     counters.success_updates.fetch_add(1, Ordering::Relaxed);

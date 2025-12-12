@@ -6,19 +6,15 @@ use anyhow::Result;
 /// EvictionBackend interface for eviction operations.
 pub trait EvictionBackend: Send + Sync {
     /// Gets the number of entries.
-    #[allow(dead_code)]
     fn len(&self) -> i64;
 
     /// Gets the memory usage in bytes.
-    #[allow(dead_code)]
     fn mem(&self) -> i64;
 
     /// Checks if soft memory limit is overcome.
-    #[allow(dead_code)] // Used in evictor workers
     fn soft_memory_limit_overcome(&self) -> bool;
 
     /// Evicts entries until within soft memory limit.
-    #[allow(dead_code)] // Used in evictor workers
     fn soft_evict_until_within_limit(&self, backoff: i64) -> (i64, i64);
 }
 

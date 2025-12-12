@@ -20,20 +20,14 @@ pub struct Evictor {
     shutdown_token: CancellationToken,
     cfg: Arc<tokio::sync::RwLock<Arc<dyn Config>>>,
     
-    #[allow(dead_code)] // Used in methods called through Service trait
-    workers_ctx: CancellationToken,
-    #[allow(dead_code)] // Used in methods called through Service trait
-    workers_cancel: CancellationToken,
+    workers_ctx: Arc<tokio::sync::RwLock<CancellationToken>>,
     workers_active: Arc<AtomicI64>,
-    #[allow(dead_code)] // Used in methods called through Service trait
     workers_kill_tx: broadcast::Sender<()>,
-    #[allow(dead_code)] // Used in methods called through Service trait
     workers_tasks_tx: broadcast::Sender<()>,
     
     inited: Arc<AtomicBool>,
     name: String,
     counters: Arc<Counters>,
-    #[allow(dead_code)] // Used in methods called through Service trait
     backend: Arc<dyn EvictionBackend>,
     transport: Arc<tokio::sync::Mutex<Option<Arc<dyn Transport>>>>,
 }
@@ -46,8 +40,7 @@ impl Evictor {
         cfg: Arc<dyn Config>,
         backend: Arc<dyn EvictionBackend>,
     ) -> Result<Arc<Self>> {
-        let workers_ctx = CancellationToken::new();
-        let workers_cancel = CancellationToken::new();
+        let workers_ctx = Arc::new(tokio::sync::RwLock::new(CancellationToken::new()));
         
         // Use broadcast channels for both kill signals and tasks (one-to-many)
         let (workers_kill_tx, _) = broadcast::channel(1);
@@ -56,8 +49,7 @@ impl Evictor {
         let evictor = Arc::new(Self {
             shutdown_token: ctx,
             cfg: Arc::new(tokio::sync::RwLock::new(cfg)),
-            workers_ctx: workers_ctx.clone(),
-            workers_cancel: workers_cancel.clone(),
+            workers_ctx,
             workers_active: Arc::new(AtomicI64::new(0)),
             workers_kill_tx,
             workers_tasks_tx,
@@ -90,24 +82,42 @@ impl Evictor {
             logger_self.soft_eviction_logger(Duration::from_secs(5)).await;
         });
 
-        // Main event loop - we'll need to poll the transport receivers
-        // For now, use a simplified approach with tokio::select!
+        // Main event loop that handles transport signals
         loop {
             tokio::select! {
                 _ = self.shutdown_token.cancelled() => {
                     return;
                 }
-                _ = tokio::time::sleep(Duration::from_millis(100)) => {
-                    // Poll transport signals periodically
-                    // This is a simplified version - full implementation would use proper channel receivers
+                _ = transport.on_start() => {
+                    if let Err(e) = self.reload(None, "starting").await {
+                        tracing::error!(name = %self.name, error = %e, "start up failed");
+                    }
+                }
+                _ = transport.on_on() => {
+                    if let Err(e) = self.on().await {
+                        tracing::error!(name = %self.name, error = %e, "turning on failed");
+                    }
+                }
+                _ = transport.on_off() => {
+                    if let Err(e) = self.off().await {
+                        tracing::error!(name = %self.name, error = %e, "turning off failed");
+                    }
+                }
+                replicas = transport.on_scale_to() => {
+                    if let Err(e) = self.scale(replicas).await {
+                        tracing::error!(name = %self.name, error = %e, "scaling failed");
+                    }
+                }
+                cfg = transport.on_reload() => {
+                    if let Err(e) = self.reload(Some(cfg), "reloading").await {
+                        tracing::error!(name = %self.name, error = %e, "reloading failed");
+                    }
                 }
             }
         }
-
     }
 
     /// Turns on the evictor.
-    #[allow(dead_code)] // Called through Service trait via Transport
     async fn on(&self) -> Result<()> {
         let was_cfg = self.config().await;
         if !was_cfg.is_enabled() {
@@ -123,7 +133,6 @@ impl Evictor {
     }
 
     /// Turns off the evictor.
-    #[allow(dead_code)] // Called through Service trait via Transport
     async fn off(&self) -> Result<()> {
         let was_cfg = self.config().await;
         if was_cfg.is_enabled() {
@@ -139,7 +148,6 @@ impl Evictor {
     }
 
     /// Reloads the evictor with new configuration.
-    #[allow(dead_code)] // Called through Service trait via Transport
     async fn reload(&self, cfg: Option<Arc<dyn Config>>, action: &str) -> Result<()> {
         info!(name = %self.name, where = "reloading", "{}...", action);
 
@@ -150,8 +158,11 @@ impl Evictor {
         self.scale_to(0).await;
 
         // Cancel and recreate workers context
-        self.workers_cancel.cancel();
-        let _new_workers_ctx = CancellationToken::new();
+        {
+            let mut w_ctx = self.workers_ctx.write().await;
+            w_ctx.cancel();
+            *w_ctx = CancellationToken::new();
+        }
         
         if let Some(new_cfg) = cfg {
             *self.cfg.write().await = new_cfg;
@@ -170,7 +181,6 @@ impl Evictor {
     }
 
     /// Scales the evictor to a specific number of replicas.
-    #[allow(dead_code)] // Called through Service trait via Transport
     async fn scale(&self, scale: usize) -> Result<()> {
         let was_cfg = self.config().await;
         if was_cfg.get_replicas() != scale {
@@ -186,11 +196,13 @@ impl Evictor {
     }
 
     /// Scales to a specific number of replicas.
-    #[allow(dead_code)] // Called through Service trait via Transport
     async fn scale_to(&self, n: usize) {
         let to = n as i64;
         if to == 0 {
-            self.workers_cancel.cancel();
+            {
+                let w_ctx = self.workers_ctx.read().await;
+                w_ctx.cancel();
+            }
             // Wait for all workers to finish
             while self.workers_active.load(Ordering::Relaxed) > 0 {
                 tokio::time::sleep(Duration::from_millis(10)).await;
@@ -203,8 +215,9 @@ impl Evictor {
         if to > actual {
             let diff = to - actual;
             let cfg = self.config().await;
+            let w_ctx = self.workers_ctx.read().await.clone();
             for _ in 0..diff {
-                self.up_one(self.workers_ctx.clone(), cfg.clone()).await;
+                self.up_one(w_ctx.clone(), cfg.clone()).await;
             }
         } else if to < actual {
             let diff = actual - to;
@@ -215,7 +228,6 @@ impl Evictor {
     }
 
     /// Downs one worker.
-    #[allow(dead_code)] // Called through Service trait via Transport
     async fn down_one(&self) {
         info!(name = %self.name, "attempt to kill someone");
         if self.workers_kill_tx.send(()).is_ok() {
@@ -224,7 +236,6 @@ impl Evictor {
     }
 
     /// Ups one worker.
-    #[allow(dead_code)] // Called through Service trait via Transport
     async fn up_one(&self, ctx: CancellationToken, cfg: Arc<dyn Config>) {
         let self_clone = self;
         let name = self_clone.name.clone();
@@ -286,7 +297,6 @@ impl Evictor {
     }
 
     /// Runs the eviction tasks provider.
-    #[allow(dead_code)] // Called internally in reload method
     async fn run_eviction_tasks_provider(&self) {
         let backend = self.backend.clone();
         let workers_tasks_tx = self.workers_tasks_tx.clone();
@@ -305,7 +315,10 @@ impl Evictor {
                     _ = shutdown_token.cancelled() => {
                         return;
                     }
-                    _ = workers_ctx.cancelled() => {
+                    _ = async {
+                        let w_ctx = workers_ctx.read().await;
+                        w_ctx.cancelled().await
+                    } => {
                         return;
                     }
                     _ = interval.tick() => {

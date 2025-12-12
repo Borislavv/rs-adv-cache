@@ -199,7 +199,6 @@ impl InMemoryStorage {
     }
 
     /// Evicts entries until within soft limit.
-    #[allow(dead_code)]
     pub fn soft_evict_until_within_limit(&self, backoff: i64) -> (i64, i64) {
         self.smap.evict_until_within_limit(self.soft_memory_limit, backoff)
     }
@@ -215,7 +214,6 @@ impl InMemoryStorage {
     }
 
     /// Checks if soft memory limit is exceeded.
-    #[allow(dead_code)]
     pub fn soft_memory_limit_overcome(&self) -> bool {
         self.smap.len() > 0 && self.smap.mem() - self.soft_memory_limit > 0
     }
