@@ -4,6 +4,8 @@ pub mod bytes;
 pub mod time;
 #[path = "shared/rate/mod.rs"]
 pub mod rate;
+#[path = "shared/safe/mod.rs"]
+pub mod safe;
 #[path = "k8s/probe/liveness/mod.rs"]
 pub mod liveness;
 

@@ -34,7 +34,6 @@ pub fn start_request_span(
 }
 
 /// Starts a refresh span context.
-#[allow(dead_code)]
 pub fn start_refresh_span_context(entry: &Entry) -> Span {
     tracing::span!(Level::INFO, "refresh", "cache.key" = entry.key())
 }
@@ -47,7 +46,6 @@ pub fn record_response_in_span(span: &Span, status_code: u16, response_size: usi
 }
 
 /// Records error in span.
-#[allow(dead_code)]
 pub fn record_error_in_span(span: &Span, err: &dyn std::error::Error) {
     tracing::error!(parent: span, error = %err, "upstream error");
 }

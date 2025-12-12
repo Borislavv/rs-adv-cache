@@ -13,7 +13,6 @@ pub struct Response {
 }
 
 /// Payload structure containing all entry data.
-#[allow(dead_code)]
 pub struct Payload {
     pub queries: Vec<(Vec<u8>, Vec<u8>)>,
     pub req_headers: Vec<(Vec<u8>, Vec<u8>)>,
@@ -23,7 +22,6 @@ pub struct Payload {
 }
 
 /// Request payload structure.
-#[allow(dead_code)]
 pub struct RequestPayload {
     pub queries: Vec<(Vec<u8>, Vec<u8>)>,
     pub headers: Vec<(Vec<u8>, Vec<u8>)>,

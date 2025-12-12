@@ -28,7 +28,6 @@ pub enum UpstreamError {
     #[error("bad status code")]
     NotHealthyStatusCode,
     #[error("invalid upstream status code")]
-    #[allow(dead_code)]
     RefreshUpstreamBadStatusCode,
 }
 
@@ -353,7 +352,43 @@ impl Upstream for BackendImpl {
         Ok(Response::new(status, response_headers, body))
     }
 
-    async fn refresh(&self, _entry: &mut Entry) -> Result<()> {
+    async fn refresh(&self, entry: &mut Entry) -> Result<()> {
+        use crate::upstream::trace;
+
+        // Decode request payload from entry
+        let request_payload = entry.request_payload()
+            .context("failed to decode request payload for refresh")?;
+
+        let queries = &request_payload.queries;
+        let headers = &request_payload.headers;
+
+        // Start tracing span
+        let span = trace::start_refresh_span_context(entry);
+        let _guard = span.enter();
+
+        // Make request to upstream
+        let rule = entry.rule.clone();
+        let trace_ctx = CancellationToken::new();
+        let resp = self.request(
+            &rule,
+            queries,
+            headers,
+            trace_ctx,
+        ).await.map_err(|e| {
+            trace::record_error_in_span(&span, e.as_ref());
+            e
+        }).context("failed to fetch new payload while refreshing")?;
+
+        // Check status code
+        if resp.status != 200 {
+            return Err(UpstreamError::RefreshUpstreamBadStatusCode.into());
+        }
+
+        // Update entry payload and timestamps
+        entry.set_payload(queries, headers, &resp);
+        entry.touch_refreshed_at();
+        entry.clear_refresh_queued();
+
         Ok(())
     }
 

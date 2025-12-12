@@ -2,7 +2,7 @@
 
 use byteorder::{ByteOrder, LittleEndian};
 use super::payload_encoder::*;
-use super::{Entry, Payload, RequestPayload, ResponsePayload};
+use super::{Entry, RequestPayload, ResponsePayload};
 
 /// Error types for payload decoding.
 #[derive(Debug, thiserror::Error)]
@@ -10,10 +10,8 @@ pub enum PayloadError {
     #[error("malformed or nil payload")]
     MalformedOrNilPayload,
     #[error("corrupted queries section")]
-    #[allow(dead_code)]
     CorruptedQueriesSection,
     #[error("corrupted request headers section")]
-    #[allow(dead_code)]
     CorruptedRequestHeadersSection,
     #[error("corrupted status code section")]
     CorruptedStatusCodeSection,
@@ -24,6 +22,19 @@ pub enum PayloadError {
 }
 
 impl Entry {
+    /// Gets the request payload (queries, headers).
+    pub fn request_payload(&self) -> Result<RequestPayload, PayloadError> {
+        let data = self.get_payload_data()?;
+
+        let queries = self.unpack_queries(&data)?;
+        let headers = self.unpack_request_headers(&data)?;
+
+        Ok(RequestPayload {
+            queries,
+            headers,
+        })
+    }
+
     /// Gets the response payload (headers, body, code).
     pub fn response_payload(&self) -> Result<ResponsePayload, PayloadError> {
         let data = self.get_payload_data()?;
@@ -37,6 +48,76 @@ impl Entry {
             body,
             code,
         })
+    }
+
+    /// Unpacks queries from the payload.
+    fn unpack_queries(&self, data: &[u8]) -> Result<Vec<(Vec<u8>, Vec<u8>)>, PayloadError> {
+        let offset_from = LittleEndian::read_u32(&data[OFF_QUERY..OFF_QUERY + OFF_WEIGHT]) as usize;
+        let offset_to = LittleEndian::read_u32(&data[OFF_REQ_HDRS..OFF_REQ_HDRS + OFF_WEIGHT]) as usize;
+
+        let mut queries = Vec::new();
+        let mut pos = offset_from;
+
+        while pos < offset_to {
+            if pos + OFF_WEIGHT > data.len() {
+                return Err(PayloadError::CorruptedQueriesSection);
+            }
+
+            let k_len = LittleEndian::read_u32(&data[pos..pos + OFF_WEIGHT]) as usize;
+            pos += OFF_WEIGHT;
+            if pos + k_len > data.len() {
+                return Err(PayloadError::CorruptedQueriesSection);
+            }
+            let k = data[pos..pos + k_len].to_vec();
+            pos += k_len;
+
+            let v_len = LittleEndian::read_u32(&data[pos..pos + OFF_WEIGHT]) as usize;
+            pos += OFF_WEIGHT;
+            if pos + v_len > data.len() {
+                return Err(PayloadError::CorruptedQueriesSection);
+            }
+            let v = data[pos..pos + v_len].to_vec();
+            pos += v_len;
+
+            queries.push((k, v));
+        }
+
+        Ok(queries)
+    }
+
+    /// Unpacks request headers from the payload.
+    fn unpack_request_headers(&self, data: &[u8]) -> Result<Vec<(Vec<u8>, Vec<u8>)>, PayloadError> {
+        let offset_from = LittleEndian::read_u32(&data[OFF_REQ_HDRS..OFF_REQ_HDRS + OFF_WEIGHT]) as usize;
+        let offset_to = LittleEndian::read_u32(&data[OFF_STATUS..OFF_STATUS + OFF_WEIGHT]) as usize;
+
+        let mut headers = Vec::new();
+        let mut pos = offset_from;
+
+        while pos < offset_to {
+            if pos + OFF_WEIGHT > data.len() {
+                return Err(PayloadError::CorruptedRequestHeadersSection);
+            }
+
+            let k_len = LittleEndian::read_u32(&data[pos..pos + OFF_WEIGHT]) as usize;
+            pos += OFF_WEIGHT;
+            if pos + k_len > data.len() {
+                return Err(PayloadError::CorruptedRequestHeadersSection);
+            }
+            let k = data[pos..pos + k_len].to_vec();
+            pos += k_len;
+
+            let v_len = LittleEndian::read_u32(&data[pos..pos + OFF_WEIGHT]) as usize;
+            pos += OFF_WEIGHT;
+            if pos + v_len > data.len() {
+                return Err(PayloadError::CorruptedRequestHeadersSection);
+            }
+            let v = data[pos..pos + v_len].to_vec();
+            pos += v_len;
+
+            headers.push((k, v));
+        }
+
+        Ok(headers)
     }
 
     /// Unpacks status code from the payload.

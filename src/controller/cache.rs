@@ -27,6 +27,7 @@ use crate::metrics::policy::Policy as LifetimePolicy;
 use crate::traces;
 use crate::http::{is_compression_enabled, panics_counter};
 use crate::upstream::actual_policy;
+use crate::safe;
 
 // Error constants
 // Removed unused constant ERR_MSG_ATTEMPT_TO_WRITE_503
@@ -540,16 +541,8 @@ impl CacheProxyController {
                         prom_metrics::flush_status_code_counters();
 
                         if cfg.is_enabled() {
-                            let hit_rate = if hits_num + misses_num > 0 {
-                                (hits_num as f64 / (hits_num + misses_num) as f64) * 100.0
-                            } else {
-                                0.0
-                            };
-                            let err_rate = if total_num > 0 {
-                                (errors_num as f64 / total_num as f64) * 100.0
-                            } else {
-                                0.0
-                            };
+                            let hit_rate = safe::divide(hits_num, hits_num + misses_num) * 100.0;
+                            let err_rate = safe::divide(errors_num, total_num) * 100.0;
                             
                             info!(
                                 target = "cache-controller",
@@ -566,11 +559,7 @@ impl CacheProxyController {
                                 "ingress"
                             );
                         } else {
-                            let err_rate = if total_num > 0 {
-                                (errors_num as f64 / total_num as f64) * 100.0
-                            } else {
-                                0.0
-                            };
+                            let err_rate = safe::divide(errors_num, total_num) * 100.0;
                             
                             info!(
                                 target = "proxy-controller",
