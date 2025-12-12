@@ -120,6 +120,9 @@ impl InMemoryStorage {
                 } else {
                     logger::ADMISSION_ALLOWED.fetch_add(1, Ordering::Relaxed);
                 }
+            } else {
+                logger::ADMISSION_NOT_ALLOWED.fetch_add(1, Ordering::Relaxed);
+                return false;
             }
         }
 

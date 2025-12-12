@@ -2,14 +2,8 @@
 pub mod bytes;
 #[path = "shared/time/mod.rs"]
 pub mod time;
-#[path = "shared/dedlog/mod.rs"]
-pub mod dedlog;
-#[path = "shared/rand/mod.rs"]
-pub mod rand;
 #[path = "shared/rate/mod.rs"]
 pub mod rate;
-#[path = "shared/sort/mod.rs"]
-pub mod sort;
 #[path = "k8s/probe/liveness/mod.rs"]
 pub mod liveness;
 
