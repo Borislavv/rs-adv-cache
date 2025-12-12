@@ -109,8 +109,6 @@ impl Dumper for DumperImpl {
         let mut handles: Vec<JoinHandle<()>> = Vec::new();
         
         // Collect entries from each shard and spawn dump tasks
-        // In Go: WalkShards -> goroutine per shard -> shard.WalkR -> write
-        // In Rust: walk_shards -> collect entries per shard -> spawn_blocking -> write
         storage_clone.walk_shards(ctx.clone(), Box::new(|shard_key, shard| {
             let dump_dir_task = dump_dir_clone.clone();
             let dump_name_task = dump_name_clone.clone();

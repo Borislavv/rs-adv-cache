@@ -6,7 +6,7 @@ High‑performance **in‑memory HTTP cache & reverse proxy** for latency‑sens
 ---
 
 ## Why advCache?
-- **Throughput**: 160–170k RPS locally; ~250k RPS sustained on 24‑core bare‑metal with a 50GB cache.
+- **Throughput**: ~175k RPS locally; ~250k RPS sustained on 24‑core bare‑metal with a 50GB cache.
 - **Memory safety**: 1.5–3GB overhead at 50GB (no traces); ~7GB at 100% OTEL sampling.
 - **Hot path discipline**: zero allocations, sharded counters, per‑shard LRU, TinyLFU admission.
 - **Control plane**: runtime API for toggles (admission, eviction, refresh, compression, tracing).

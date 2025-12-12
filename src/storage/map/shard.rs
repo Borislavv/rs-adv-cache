@@ -252,16 +252,41 @@ impl<V: Value> Shard<V> {
         V: Clone,
     {
         let mut data = self.data.write();
-        if data.lru_on {
-            if let Some(ref mut lru) = data.lru {
-                if let Some(key) = lru.pop_tail() {
-                    if let Some(value) = data.items.get(&key).cloned() {
-                        return Some((key, value));
-                    }
-                }
-            }
+        if !data.lru_on {
+            return None;
         }
-        None
+        let lru = match &mut data.lru {
+            Some(l) => l,
+            None => return None,
+        };
+        
+        // Get tail key from LRU
+        let key = match lru.peek_tail() {
+            Some(k) => k,
+            None => return None,
+        };
+        
+        // Get value from items
+        let value = match data.items.get(&key).cloned() {
+            Some(v) => v,
+            None => {
+                // Item was already removed, clean up LRU
+                lru.pop_tail();
+                return None;
+            }
+        };
+        
+        // Remove from items
+        data.items.remove(&key);
+        
+        let weight = value.weight();
+        self.len.fetch_sub(1, Ordering::Relaxed);
+        self.mem.fetch_sub(weight, Ordering::Relaxed);
+        
+        // Remove from LRU
+        lru.pop_tail();
+        
+        Some((key, value))
     }
 
     /// Walks over items with a read lock.

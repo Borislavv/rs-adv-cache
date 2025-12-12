@@ -48,7 +48,7 @@ impl<V: Value> Map<V> {
             shards,
         };
 
-        // Enable/disable LRU based on mode (as in Go: m.useListingMode() / m.useSamplingMode())
+        // Enable/disable LRU based on mode
         if matches!(mode, LRUMode::Listing) {
             map.use_listing_mode();
         } else {
@@ -190,7 +190,6 @@ impl<V: Value> Map<V> {
     }
 
     /// Enables listing mode (full LRU).
-    /// Called during initialization in New() as in Go.
     fn use_listing_mode(&mut self) {
         self.mode = LRUMode::Listing;
         for shard in &self.shards {
@@ -199,7 +198,6 @@ impl<V: Value> Map<V> {
     }
 
     /// Enables sampling mode (approximate LRU).
-    /// Called during initialization in New() as in Go.
     fn use_sampling_mode(&mut self) {
         self.mode = LRUMode::Sampling;
         for shard in &self.shards {
