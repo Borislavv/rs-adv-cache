@@ -1,6 +1,7 @@
 // Package storage provides dump/load functionality for persistence.
 
 use anyhow::{Context, Result};
+use std::collections::HashMap;
 use std::fs;
 use std::io::{BufReader, BufWriter, Read, Write};
 use std::path::{Path, PathBuf};
@@ -14,13 +15,12 @@ use flate2::read::GzDecoder;
 use flate2::write::GzEncoder;
 use flate2::Compression;
 use crc32fast::Hasher;
+use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 
 use crate::config::{Config, ConfigTrait};
 use crate::model::Entry;
 use crate::model::to_bytes::from_bytes;
 use crate::storage::Storage;
-use crate::storage::map::Shard;
-use crate::shared::time;
 
 const DUMP_BUFFER_SIZE: usize = 512 * 1024; // 512 KiB
 
@@ -97,7 +97,6 @@ impl Dumper for DumperImpl {
         
         // Walk shards and dump each one (using blocking spawn for file I/O)
         let storage_clone = self.storage.clone();
-        let cfg_clone = self.cfg.clone();
         let dump_dir_clone = version_dir.clone();
         let dump_name_clone = dump_name.clone();
         let timestamp_clone = timestamp.clone();
@@ -106,23 +105,43 @@ impl Dumper for DumperImpl {
         let gzip = dump_cfg.gzip;
         let crc32_control = dump_cfg.crc32_control;
         
+        // First, collect all entries from all shards synchronously
+        use std::sync::Mutex;
+        let entries_by_shard: Arc<Mutex<HashMap<u64, Vec<Entry>>>> = Arc::new(Mutex::new(HashMap::new()));
+        let ctx_walk = ctx.clone();
+        {
+            let entries_by_shard_clone = entries_by_shard.clone();
+            storage_clone.walk_shards(ctx_walk.clone(), Box::new(move |shard_key, shard| {
+                let mut entries: Vec<Entry> = Vec::new();
+                shard.walk_r(&ctx_walk, |_k, entry: &Entry| {
+                    entries.push(entry.clone());
+                    true
+                });
+                if !entries.is_empty() {
+                    let mut map = entries_by_shard_clone.lock().unwrap();
+                    map.insert(shard_key, entries);
+                }
+            }));
+        }
+        let entries_by_shard = match Arc::try_unwrap(entries_by_shard) {
+            Ok(m) => m.into_inner().expect("Mutex should not be poisoned"),
+            Err(arc) => {
+                // Should not happen, but handle gracefully - clone if needed
+                let m = arc.lock().unwrap();
+                m.clone()
+            }
+        };
+        
+        // Now spawn blocking tasks for each shard
         let mut handles: Vec<JoinHandle<()>> = Vec::new();
         
-        // Collect entries from each shard and spawn dump tasks
-        storage_clone.walk_shards(ctx.clone(), Box::new(|shard_key, shard| {
+        for (shard_key, entries) in entries_by_shard {
             let dump_dir_task = dump_dir_clone.clone();
             let dump_name_task = dump_name_clone.clone();
             let timestamp_task = timestamp_clone.clone();
             let success_task = success_clone.clone();
             let failures_task = failures_clone.clone();
             let ctx_task = ctx.clone();
-            
-            // Collect entries from this shard
-            let mut entries: Vec<Entry> = Vec::new();
-            shard.walk_r(&ctx_task, |_k, entry: &Entry| {
-                entries.push(entry.clone());
-                true
-            });
             
             // Spawn blocking task to write dump file
             let handle = tokio::task::spawn_blocking(move || {
@@ -131,7 +150,12 @@ impl Dumper for DumperImpl {
                 let actual_shard_id = shard_key; // In walk_shards, the key is the shard id
                 let name = dump_dir_task.join(format!("{}-shard-{}-{}{}", 
                     dump_name_task, actual_shard_id, timestamp_task, ext));
-                let tmp_name = name.with_extension(format!("dump.tmp"));
+                // Create tmp name: replace extension with .tmp or append .tmp
+                let tmp_name = if let Some(ext) = name.extension() {
+                    name.with_extension(format!("{}.tmp", ext.to_string_lossy()))
+                } else {
+                    name.with_extension("tmp")
+                };
                 
                 // Create file
                 let file = match std::fs::File::create(&tmp_name) {
@@ -144,7 +168,7 @@ impl Dumper for DumperImpl {
                 };
                 
                 // Create writer (with optional gzip)
-                let result = if gzip {
+                if gzip {
                     let gz_encoder = GzEncoder::new(file, Compression::default());
                     let mut writer = BufWriter::with_capacity(DUMP_BUFFER_SIZE, gz_encoder);
                     
@@ -165,8 +189,9 @@ impl Dumper for DumperImpl {
                         
                         // Write meta: [len: u32][crc: u32]
                         let mut meta_buf = [0u8; 8];
-                        byteorder::LittleEndian::write_u32(&mut meta_buf[0..4], data.len() as u32);
-                        byteorder::LittleEndian::write_u32(&mut meta_buf[4..8], crc);
+                        let mut meta_writer = std::io::Cursor::new(&mut meta_buf[..]);
+                        let _ = meta_writer.write_u32::<LittleEndian>(data.len() as u32);
+                        let _ = meta_writer.write_u32::<LittleEndian>(crc);
                         
                         if writer.write_all(&meta_buf).is_err() || writer.write_all(&data).is_err() {
                             failures_task.fetch_add(1, Ordering::Relaxed);
@@ -176,10 +201,28 @@ impl Dumper for DumperImpl {
                         success_task.fetch_add(1, Ordering::Relaxed);
                     }
                     
-                    writer.flush().and_then(|_| {
-                        // Finish gzip encoder - extract from BufWriter
-                        writer.into_inner().and_then(|gz| gz.finish())
-                    })
+                    // Flush writer
+                    if let Err(e) = writer.flush() {
+                        error!(file = %tmp_name.display(), error = %e, "[dump] flush error");
+                        failures_task.fetch_add(1, Ordering::Relaxed);
+                        return;
+                    }
+                    
+                    // Finish gzip encoder - extract from BufWriter and finish
+                    match writer.into_inner() {
+                        Ok(gz) => {
+                            if let Err(e) = gz.finish() {
+                                error!(file = %tmp_name.display(), error = %e, "[dump] gzip finish error");
+                                failures_task.fetch_add(1, Ordering::Relaxed);
+                                return;
+                            }
+                        },
+                        Err(e) => {
+                            error!(file = %tmp_name.display(), error = ?e, "[dump] into_inner error");
+                            failures_task.fetch_add(1, Ordering::Relaxed);
+                            return;
+                        }
+                    }
                 } else {
                     let mut writer = BufWriter::with_capacity(DUMP_BUFFER_SIZE, file);
                     
@@ -200,8 +243,9 @@ impl Dumper for DumperImpl {
                         
                         // Write meta: [len: u32][crc: u32]
                         let mut meta_buf = [0u8; 8];
-                        byteorder::LittleEndian::write_u32(&mut meta_buf[0..4], data.len() as u32);
-                        byteorder::LittleEndian::write_u32(&mut meta_buf[4..8], crc);
+                        let mut meta_writer = std::io::Cursor::new(&mut meta_buf[..]);
+                        let _ = meta_writer.write_u32::<LittleEndian>(data.len() as u32);
+                        let _ = meta_writer.write_u32::<LittleEndian>(crc);
                         
                         if writer.write_all(&meta_buf).is_err() || writer.write_all(&data).is_err() {
                             failures_task.fetch_add(1, Ordering::Relaxed);
@@ -211,15 +255,13 @@ impl Dumper for DumperImpl {
                         success_task.fetch_add(1, Ordering::Relaxed);
                     }
                     
-                    writer.flush()
+                    // Flush writer
+                    if let Err(e) = writer.flush() {
+                        error!(file = %tmp_name.display(), error = %e, "[dump] flush error");
+                        failures_task.fetch_add(1, Ordering::Relaxed);
+                        return;
+                    }
                 };
-                
-                // Handle flush result
-                if let Err(e) = result {
-                    error!(file = %tmp_name.display(), error = %e, "[dump] flush error");
-                    failures_task.fetch_add(1, Ordering::Relaxed);
-                    return;
-                }
                 
                 // Rename tmp to final
                 if let Err(e) = fs::rename(&tmp_name, &name) {
@@ -363,8 +405,9 @@ impl DumperImpl {
                         }
                     }
                     
-                    let sz = byteorder::LittleEndian::read_u32(&meta_buf[0..4]) as usize;
-                    let exp_crc = byteorder::LittleEndian::read_u32(&meta_buf[4..8]);
+                    let mut meta_reader = std::io::Cursor::new(&meta_buf[..]);
+                    let sz = meta_reader.read_u32::<LittleEndian>().unwrap_or(0) as usize;
+                    let exp_crc = meta_reader.read_u32::<LittleEndian>().unwrap_or(0);
                     
                     // Read entry data
                     let mut buf = vec![0u8; sz];
