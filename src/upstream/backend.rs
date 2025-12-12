@@ -181,16 +181,30 @@ impl Upstream for BackendImpl {
             url = format!("{}?{}", url, query_parts.join("&"));
         }
 
+        // Build headers map for sanitization
+        let mut header_map = axum::http::HeaderMap::new();
+        for (key, value) in headers {
+            if let (Ok(k), Ok(v)) = (
+                axum::http::HeaderName::try_from(key.as_slice()),
+                axum::http::HeaderValue::from_bytes(value),
+            ) {
+                header_map.insert(k, v);
+            }
+        }
+
+        // Sanitize hop-by-hop headers from request
+        crate::upstream::sanitize::sanitize_hop_by_hop_request_headers(&mut header_map);
+
+        // Note: proxy_forwarded_host is not needed here as this is for cache request method
+        // which doesn't use X-Forwarded-Host from original client request
+
         // Build request
         let mut request = self.client.get(&url);
 
-        // Add headers
-        for (key, value) in headers {
-            if let (Ok(k), Ok(v)) = (
-                String::from_utf8(key.clone()),
-                String::from_utf8(value.clone()),
-            ) {
-                request = request.header(&k, &v);
+        // Add sanitized headers
+        for (key, value) in header_map.iter() {
+            if let Ok(value_str) = value.to_str() {
+                request = request.header(key.as_str(), value_str);
             }
         }
 
@@ -202,8 +216,35 @@ impl Upstream for BackendImpl {
             .context("Request failed")?;
 
         let status = response.status().as_u16();
-        let mut response_headers = Vec::new();
+        
+        // Sanitize response headers
+        let mut response_headers_map = axum::http::HeaderMap::new();
         for (key, value) in response.headers() {
+            if let Ok(value_str) = value.to_str() {
+                if let (Ok(name), Ok(val)) = (
+                    axum::http::HeaderName::try_from(key.as_str().as_bytes()),
+                    axum::http::HeaderValue::from_str(value_str),
+                ) {
+                    response_headers_map.insert(name, val);
+                }
+            }
+        }
+        crate::upstream::sanitize::sanitize_hop_by_hop_response_headers(&mut response_headers_map);
+        
+        // Convert sanitized headers to Vec
+        let mut response_headers = Vec::new();
+        for (key, value) in response_headers_map.iter() {
+            if let Ok(value_str) = value.to_str() {
+                response_headers.push((key.to_string(), value_str.to_string()));
+            }
+        }
+
+        // Apply rule-based sanitization
+        crate::upstream::sanitize::sanitize_response_headers_by_rule(Some(rule), &mut response_headers_map);
+        
+        // Rebuild response_headers after rule sanitization
+        response_headers.clear();
+        for (key, value) in response_headers_map.iter() {
             if let Ok(value_str) = value.to_str() {
                 response_headers.push((key.to_string(), value_str.to_string()));
             }
@@ -233,6 +274,26 @@ impl Upstream for BackendImpl {
             url = format!("{}?{}", url, query);
         }
 
+        // Build source headers map from input headers (for proxy_forwarded_host)
+        let mut src_header_map = axum::http::HeaderMap::new();
+        for (key, value) in headers {
+            if let (Ok(name), Ok(val)) = (
+                axum::http::HeaderName::try_from(key.as_bytes()),
+                axum::http::HeaderValue::from_str(value),
+            ) {
+                src_header_map.insert(name, val);
+            }
+        }
+
+        // Build destination headers map for outgoing request
+        let mut header_map = src_header_map.clone();
+
+        // Apply proxy_forwarded_host - sets Host header from X-Forwarded-Host or Host in source
+        crate::upstream::proxy::proxy_forwarded_host(&mut header_map, &src_header_map);
+
+        // Sanitize hop-by-hop headers from request
+        crate::upstream::sanitize::sanitize_hop_by_hop_request_headers(&mut header_map);
+
         // Build request based on method
         let mut request = match method {
             "GET" => self.client.get(&url),
@@ -242,9 +303,11 @@ impl Upstream for BackendImpl {
             _ => self.client.get(&url),
         };
 
-        // Add headers
-        for (key, value) in headers {
-            request = request.header(key, value);
+        // Add sanitized headers
+        for (key, value) in header_map.iter() {
+            if let Ok(value_str) = value.to_str() {
+                request = request.header(key.as_str(), value_str);
+            }
         }
 
         // Add body if present
@@ -260,8 +323,24 @@ impl Upstream for BackendImpl {
             .context("Request failed")?;
 
         let status = response.status().as_u16();
-        let mut response_headers = Vec::new();
+        
+        // Sanitize response headers
+        let mut response_headers_map = axum::http::HeaderMap::new();
         for (key, value) in response.headers() {
+            if let Ok(value_str) = value.to_str() {
+                if let (Ok(name), Ok(val)) = (
+                    axum::http::HeaderName::try_from(key.as_str().as_bytes()),
+                    axum::http::HeaderValue::from_str(value_str),
+                ) {
+                    response_headers_map.insert(name, val);
+                }
+            }
+        }
+        crate::upstream::sanitize::sanitize_hop_by_hop_response_headers(&mut response_headers_map);
+        
+        // Convert sanitized headers to Vec
+        let mut response_headers = Vec::new();
+        for (key, value) in response_headers_map.iter() {
             if let Ok(value_str) = value.to_str() {
                 response_headers.push((key.to_string(), value_str.to_string()));
             }

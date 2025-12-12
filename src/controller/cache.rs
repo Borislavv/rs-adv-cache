@@ -430,12 +430,12 @@ impl CacheProxyController {
             HeaderValue::from_static("application/json"),
         );
         
-        let body = b"{\"error\":\"service unavailable\"}";
+        const UNAVAILABLE_RESPONSE_BODY: &[u8] = b"{\"status\":503,\"error\":\"Service Unavailable\",\"message\":\"Sorry for that, please try again later or contact support.\"}";
         
         Response::builder()
             .status(StatusCode::SERVICE_UNAVAILABLE)
-            .header("content-length", body.len())
-            .body(body.to_vec().into())
+            .header("content-length", UNAVAILABLE_RESPONSE_BODY.len())
+            .body(UNAVAILABLE_RESPONSE_BODY.to_vec().into())
             .map(|mut resp| {
                 *resp.headers_mut() = headers;
                 resp

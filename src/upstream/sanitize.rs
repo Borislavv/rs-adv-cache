@@ -3,7 +3,6 @@ use axum::http::{HeaderMap, HeaderName};
 use crate::config::Rule;
 
 /// Hop-by-hop headers that must not be forwarded by proxies (RFC 7230, section 6.1).
-#[allow(dead_code)]
 const HOP_BY_HOP: &[&str] = &[
     "connection",
     "proxy-connection",
@@ -17,7 +16,6 @@ const HOP_BY_HOP: &[&str] = &[
 ];
 
 /// Sanitizes hop-by-hop headers from request.
-#[allow(dead_code)]
 pub fn sanitize_hop_by_hop_request_headers(headers: &mut HeaderMap) {
     for &header_name in HOP_BY_HOP {
         if let Ok(name) = HeaderName::try_from(header_name.as_bytes()) {
@@ -27,13 +25,11 @@ pub fn sanitize_hop_by_hop_request_headers(headers: &mut HeaderMap) {
 }
 
 /// Sanitizes hop-by-hop headers from response.
-#[allow(dead_code)]
 pub fn sanitize_hop_by_hop_response_headers(headers: &mut HeaderMap) {
     sanitize_hop_by_hop_request_headers(headers);
 }
 
 /// Sanitizes response headers based on rule configuration.
-#[allow(dead_code)]
 pub fn sanitize_response_headers_by_rule(rule: Option<&Rule>, headers: &mut HeaderMap) {
     let rule = match rule {
         Some(r) => r,
