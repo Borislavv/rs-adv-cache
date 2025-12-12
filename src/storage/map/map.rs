@@ -48,15 +48,11 @@ impl<V: Value> Map<V> {
             shards,
         };
 
-        // Enable/disable LRU based on mode
+        // Enable/disable LRU based on mode (as in Go: m.useListingMode() / m.useSamplingMode())
         if matches!(mode, LRUMode::Listing) {
-            for shard in &map.shards {
-                shard.enable_lru();
-            }
+            map.use_listing_mode();
         } else {
-            for shard in &map.shards {
-                shard.disable_lru();
-            }
+            map.use_sampling_mode();
         }
 
         map
@@ -109,7 +105,7 @@ impl<V: Value> Map<V> {
     }
 
     /// Walks over shards concurrently with bounded concurrency.
-    #[allow(dead_code)]
+    /// Used in tests and can be used for async operations.
     pub async fn walk_shards_concurrent<F>(&self, token: &CancellationToken, concurrency: usize, f: F)
     where
         F: Fn(u64, &Shard<V>) + Send + Sync + Clone + 'static,
@@ -194,13 +190,16 @@ impl<V: Value> Map<V> {
     }
 
     /// Enables listing mode (full LRU).
-    #[allow(dead_code)]
+    /// Called during initialization in New() as in Go.
     fn use_listing_mode(&mut self) {
         self.mode = LRUMode::Listing;
+        for shard in &self.shards {
+            shard.enable_lru();
+        }
     }
 
     /// Enables sampling mode (approximate LRU).
-    #[allow(dead_code)]
+    /// Called during initialization in New() as in Go.
     fn use_sampling_mode(&mut self) {
         self.mode = LRUMode::Sampling;
         for shard in &self.shards {

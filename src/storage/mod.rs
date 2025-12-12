@@ -17,7 +17,6 @@ pub mod mocks {
     use super::Storage;
     use std::sync::Arc;
 
-    #[allow(dead_code)]
     pub fn load_mocks(
         ctx: CancellationToken,
         cfg: Config,

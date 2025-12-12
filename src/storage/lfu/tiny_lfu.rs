@@ -76,6 +76,12 @@ impl ShardedAdmitter {
         let vf = sh.sketch.estimate(victim);
         cf > vf
     }
+
+    /// Estimates frequency for a key (for metrics/diagnostics).
+    pub fn estimate(&self, h: u64) -> u8 {
+        let sh = &self.shards[(h & self.mask as u64) as usize];
+        sh.sketch.estimate(h)
+    }
 }
 
 impl Default for ShardedAdmitter {

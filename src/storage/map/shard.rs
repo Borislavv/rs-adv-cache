@@ -85,13 +85,13 @@ impl<V: Value> Shard<V> {
     }
 
     /// Gets the shard ID.
-    #[allow(dead_code)]
+    /// Part of public API, may be used for diagnostics or tests.
     pub fn id(&self) -> u64 {
         self.id
     }
 
     /// Gets the total weight in bytes.
-    #[allow(dead_code)] // Used in eviction and other internal operations
+    /// Used in eviction and other internal operations.
     pub fn weight(&self) -> i64 {
         self.mem.load(Ordering::Relaxed)
     }
@@ -233,7 +233,14 @@ impl<V: Value> Shard<V> {
     pub fn lru_peek_tail(&self) -> Option<u64> {
         let data = self.data.read();
         if data.lru_on {
-            data.lru.as_ref().and_then(|lru| lru.peek_tail())
+            data.lru.as_ref().and_then(|lru| {
+                // Check if empty before peeking (as done in eviction checks)
+                if lru.is_empty() {
+                    None
+                } else {
+                    lru.peek_tail()
+                }
+            })
         } else {
             None
         }

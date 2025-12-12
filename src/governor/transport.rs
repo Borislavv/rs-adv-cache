@@ -28,6 +28,9 @@ pub trait Transport: Send + Sync {
     /// Sends a scale signal with replica count.
     async fn scale_to(&self, n: usize) -> bool;
 
+    /// Sends a stop signal.
+    async fn stop(&self) -> bool;
+
     /// Waits for a start signal.
     async fn on_start(&self) -> ();
 
@@ -42,6 +45,9 @@ pub trait Transport: Send + Sync {
 
     /// Waits for a scale signal.
     async fn on_scale_to(&self) -> usize;
+
+    /// Waits for a stop signal.
+    async fn on_stop(&self) -> ();
 }
 
 /// ChanneledTransport implements Transport using channels.
@@ -56,6 +62,8 @@ pub struct ChanneledTransport {
     reload_rx: Arc<tokio::sync::Mutex<mpsc::Receiver<Arc<dyn Config>>>>,
     scale_tx: mpsc::Sender<usize>,
     scale_rx: Arc<tokio::sync::Mutex<mpsc::Receiver<usize>>>,
+    stop_tx: mpsc::Sender<()>,
+    stop_rx: Arc<tokio::sync::Mutex<mpsc::Receiver<()>>>,
 }
 
 impl ChanneledTransport {
@@ -66,6 +74,7 @@ impl ChanneledTransport {
         let (off_tx, off_rx) = mpsc::channel(1);
         let (reload_tx, reload_rx) = mpsc::channel(1);
         let (scale_tx, scale_rx) = mpsc::channel(1);
+        let (stop_tx, stop_rx) = mpsc::channel(1);
 
         Arc::new(Self {
             start_tx,
@@ -78,6 +87,8 @@ impl ChanneledTransport {
             reload_rx: Arc::new(tokio::sync::Mutex::new(reload_rx)),
             scale_tx,
             scale_rx: Arc::new(tokio::sync::Mutex::new(scale_rx)),
+            stop_tx,
+            stop_rx: Arc::new(tokio::sync::Mutex::new(stop_rx)),
         })
     }
 
@@ -121,6 +132,10 @@ impl Transport for ChanneledTransport {
         Self::try_retry(|| Self::try_send(&self.scale_tx, n))
     }
 
+    async fn stop(&self) -> bool {
+        Self::try_retry(|| Self::try_send(&self.stop_tx, ()))
+    }
+
     async fn on_start(&self) -> () {
         let mut rx = self.start_rx.lock().await;
         rx.recv().await;
@@ -153,5 +168,10 @@ impl Transport for ChanneledTransport {
     async fn on_scale_to(&self) -> usize {
         let mut rx = self.scale_rx.lock().await;
         rx.recv().await.unwrap_or(0)
+    }
+
+    async fn on_stop(&self) -> () {
+        let mut rx = self.stop_rx.lock().await;
+        rx.recv().await;
     }
 }

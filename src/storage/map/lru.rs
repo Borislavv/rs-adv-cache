@@ -91,7 +91,6 @@ impl LRUList {
     }
 
     /// Checks if the list is empty.
-    #[allow(dead_code)]
     pub fn is_empty(&self) -> bool {
         self.order.is_empty()
     }

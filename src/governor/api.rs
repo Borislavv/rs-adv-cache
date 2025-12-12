@@ -27,5 +27,8 @@ pub trait Governor: Send + Sync {
 
     /// Scales a service to n replicas.
     fn scale_to(&self, name: &str, n: usize) -> Result<()>;
+
+    /// Stops all services.
+    async fn stop(&self);
 }
 

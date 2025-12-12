@@ -15,7 +15,6 @@ use crate::upstream::Upstream;
 // Shard type is re-exported from storage::map::mod.rs
 
 // Constants
-#[allow(dead_code)]
 const COMP_STORAGE: &str = "storage";
 const COMP_DUMP: &str = "dump";
 pub const SVC_EVICTOR: &str = "soft-eviction";
@@ -34,11 +33,9 @@ pub trait Storage: Send + Sync {
     fn set(&self, entry: Entry) -> bool;
 
     /// Walks through all shards, calling the provided function for each shard.
-    #[allow(dead_code)]
     fn walk_shards(&self, ctx: CancellationToken, f: Box<dyn FnMut(u64, &crate::storage::map::Shard<Entry>) + Send + Sync>);
 
     /// Removes an entry from storage, returning freed bytes and a hit flag.
-    #[allow(dead_code)]
     fn remove(&self, entry: &Entry) -> (i64, bool);
 
     /// Returns storage statistics: (bytes, entry_count).
@@ -53,7 +50,6 @@ pub struct DB {
     in_memory_storage: Arc<crate::storage::lru::InMemoryStorage>,
     cfg: Config,
     shutdown_token: CancellationToken,
-    #[allow(dead_code)]
     governor: Arc<dyn Governor>,
     persistence: Arc<dyn Dumper>,
 }
@@ -225,6 +221,56 @@ impl DB {
             }
         }
         self
+    }
+
+    /// Performs a graceful shutdown: dump (if enabled), stop LRU, then stop the governor.
+    pub async fn close(&self) -> Result<()> {
+        use std::time::Duration;
+        use tokio::time::timeout;
+
+        // Graceful stop for governor first with its own timeout context
+        let stop_timeout = Duration::from_secs(60);
+
+        // Dump if enabled
+        if self.cfg.is_enabled() && self.cfg.data()
+            .and_then(|d| d.dump.as_ref())
+            .map(|d| d.enabled)
+            .unwrap_or(false)
+        {
+            let persistence = self.persistence.clone();
+            let token = self.shutdown_token.clone();
+            if let Err(e) = persistence.dump(token).await {
+                error!(
+                    component = COMP_DUMP,
+                    event = "store_failed",
+                    error = %e,
+                    "failed to store cache dump"
+                );
+            }
+        }
+
+        // Close storage first to prevent new backend activity
+        // In Go: db.InMemoryStorage.Close() is called here
+        // In Rust, we should call in_memory_storage.close() if it exists
+        // For now, cleanup happens via shutdown_token cancellation
+        // TODO: Verify if InMemoryStorage needs explicit close method
+
+        // Stop governor
+        if let Err(e) = timeout(stop_timeout, self.governor.stop()).await {
+            error!(
+                component = COMP_STORAGE,
+                event = "close_failed",
+                error = %e,
+                "governor stop timeout or failed"
+            );
+        } else {
+            info!(component = COMP_STORAGE, event = "close", "storage closed successfully");
+        }
+
+        // Cancel internal context last
+        self.shutdown_token.cancel();
+
+        Ok(())
     }
 }
 

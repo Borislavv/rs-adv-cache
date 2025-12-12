@@ -13,7 +13,7 @@ pub trait Admission: Send + Sync {
     fn allow(&self, candidate: u64, victim: u64) -> bool;
 
     /// Exposes frequency estimate (for metrics/diagnostics).
-    #[allow(dead_code)]
+    /// Used internally in allow() and can be used for diagnostics.
     fn estimate(&self, h: u64) -> u8;
 }
 
@@ -24,6 +24,10 @@ impl Admission for ShardedAdmitter {
 
     fn allow(&self, candidate: u64, victim: u64) -> bool {
         ShardedAdmitter::allow(self, candidate, victim)
+    }
+
+    fn estimate(&self, h: u64) -> u8 {
+        ShardedAdmitter::estimate(self, h)
     }
 }
 

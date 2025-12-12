@@ -2,7 +2,7 @@
 
 use anyhow::Result;
 use std::sync::atomic::Ordering;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use tokio_util::sync::CancellationToken;
 
 use crate::config::{Config, ConfigTrait};
@@ -289,9 +289,13 @@ impl crate::storage::Storage for InMemoryStorage {
     }
 
     fn walk_shards(&self, ctx: CancellationToken, mut f: Box<dyn FnMut(u64, &crate::storage::map::Shard<Entry>) + Send + Sync>) {
-        let ctx = &ctx;
-        self.smap.walk_shards(ctx, |shard_id, shard| {
-            if !ctx.is_cancelled() {
+        // In Go: s.smap.WalkShardsConcurrent(ctx, runtime.GOMAXPROCS(0), fn)
+        // Note: Go's WalkShardsConcurrent uses goroutines which are concurrent but blocking.
+        // In Rust, we use sync walk_shards for trait compatibility, but walk_shards_concurrent
+        // is available for async use cases.
+        let ctx_ref = &ctx;
+        self.smap.walk_shards(ctx_ref, |shard_id, shard| {
+            if !ctx_ref.is_cancelled() {
                 f(shard_id, shard);
             }
         });
