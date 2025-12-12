@@ -1,14 +1,12 @@
 // Package storage provides dump/load functionality for persistence.
 
 use anyhow::{Context, Result};
-use std::collections::HashMap;
 use std::fs;
 use std::io::{BufReader, BufWriter, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicI32, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Instant;
-use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info};
 use flate2::read::GzDecoder;
@@ -21,6 +19,7 @@ use crate::config::{Config, ConfigTrait};
 use crate::model::Entry;
 use crate::model::to_bytes::from_bytes;
 use crate::storage::Storage;
+use crate::time;
 
 const DUMP_BUFFER_SIZE: usize = 512 * 1024; // 512 KiB
 
@@ -89,194 +88,133 @@ impl Dumper for DumperImpl {
         fs::create_dir_all(&version_dir)
             .with_context(|| format!("create version dir: {}", version_dir.display()))?;
         
-        // Format timestamp: 20060102T150405
-        let timestamp = chrono::Local::now().format("%Y%m%dT%H%M%S").to_string();
+        // Format timestamp: 20060102T150405 (Go: "20060102T150405")
+        use chrono::Local;
+        let timestamp = Local::now().format("%Y%m%dT%H%M%S").to_string();
         
         let success = Arc::new(AtomicI32::new(0));
         let failures = Arc::new(AtomicI32::new(0));
         
-        // Walk shards and dump each one (using blocking spawn for file I/O)
+        // Walk shards and dump each shard directly (streaming: no accumulation)
+        // Call walk_r synchronously in callback and write directly to file
         let storage_clone = self.storage.clone();
-        let dump_dir_clone = version_dir.clone();
+        let version_dir_clone = version_dir.clone();
         let dump_name_clone = dump_name.clone();
         let timestamp_clone = timestamp.clone();
         let success_clone = success.clone();
         let failures_clone = failures.clone();
         let gzip = dump_cfg.gzip;
         let crc32_control = dump_cfg.crc32_control;
-        
-        // First, collect all entries from all shards synchronously
-        use std::sync::Mutex;
-        let entries_by_shard: Arc<Mutex<HashMap<u64, Vec<Entry>>>> = Arc::new(Mutex::new(HashMap::new()));
         let ctx_walk = ctx.clone();
-        {
-            let entries_by_shard_clone = entries_by_shard.clone();
-            storage_clone.walk_shards(ctx_walk.clone(), Box::new(move |shard_key, shard| {
-                let mut entries: Vec<Entry> = Vec::new();
-                shard.walk_r(&ctx_walk, |_k, entry: &Entry| {
-                    entries.push(entry.clone());
-                    true
-                });
-                if !entries.is_empty() {
-                    let mut map = entries_by_shard_clone.lock().unwrap();
-                    map.insert(shard_key, entries);
-                }
-            }));
-        }
-        let entries_by_shard = match Arc::try_unwrap(entries_by_shard) {
-            Ok(m) => m.into_inner().expect("Mutex should not be poisoned"),
-            Err(arc) => {
-                // Should not happen, but handle gracefully - clone if needed
-                let m = arc.lock().unwrap();
-                m.clone()
+        
+        storage_clone.walk_shards(ctx_walk.clone(), Box::new(move |shard_key, shard| {
+            if ctx_walk.is_cancelled() {
+                return;
             }
-        };
-        
-        // Now spawn blocking tasks for each shard
-        let mut handles: Vec<JoinHandle<()>> = Vec::new();
-        
-        for (shard_key, entries) in entries_by_shard {
-            let dump_dir_task = dump_dir_clone.clone();
-            let dump_name_task = dump_name_clone.clone();
-            let timestamp_task = timestamp_clone.clone();
-            let success_task = success_clone.clone();
-            let failures_task = failures_clone.clone();
-            let ctx_task = ctx.clone();
             
-            // Spawn blocking task to write dump file
-            let handle = tokio::task::spawn_blocking(move || {
-                let ext = if gzip { ".dump.gz" } else { ".dump" };
-                // Use shard.id() for consistency (though shard_key is already the id)
-                let actual_shard_id = shard_key; // In walk_shards, the key is the shard id
-                let name = dump_dir_task.join(format!("{}-shard-{}-{}{}", 
-                    dump_name_task, actual_shard_id, timestamp_task, ext));
-                // Create tmp name: replace extension with .tmp or append .tmp
-                let tmp_name = if let Some(ext) = name.extension() {
-                    name.with_extension(format!("{}.tmp", ext.to_string_lossy()))
+            let ext = if gzip { ".dump.gz" } else { ".dump" };
+            let name = version_dir_clone.join(format!("{}-shard-{}-{}{}", 
+                dump_name_clone, shard_key, timestamp_clone, ext));
+            // tmp = name + ".tmp" (exactly as Go: tmp := name + ".tmp")
+            let tmp_name = PathBuf::from(format!("{}.tmp", name.display()));
+            
+            // Create file
+            let file = match std::fs::File::create(&tmp_name) {
+                Ok(f) => f,
+                Err(e) => {
+                    error!(file = %tmp_name.display(), error = %e, "[dump] create error");
+                    failures_clone.fetch_add(1, Ordering::Relaxed);
+                    return;
+                }
+            };
+            
+            // Create writer pipeline: File -> optional GzEncoder -> BufWriter(512KB)
+            enum WriterType {
+                Plain(BufWriter<std::fs::File>),
+                Gzip(BufWriter<GzEncoder<std::fs::File>>),
+            }
+            
+            let mut writer = if gzip {
+                WriterType::Gzip(BufWriter::with_capacity(DUMP_BUFFER_SIZE, GzEncoder::new(file, Compression::default())))
+            } else {
+                WriterType::Plain(BufWriter::with_capacity(DUMP_BUFFER_SIZE, file))
+            };
+            
+            // Stream entries directly from shard to file (no accumulation)
+            shard.walk_r(&ctx_walk, |_k, entry: &Entry| {
+                if ctx_walk.is_cancelled() {
+                    return false;
+                }
+                
+                let data = entry.to_bytes();
+                let crc = if crc32_control {
+                    let mut hasher = Hasher::new();
+                    hasher.update(&data);
+                    hasher.finalize()
                 } else {
-                    name.with_extension("tmp")
+                    0
                 };
                 
-                // Create file
-                let file = match std::fs::File::create(&tmp_name) {
-                    Ok(f) => f,
-                    Err(e) => {
-                        error!(file = %tmp_name.display(), error = %e, "[dump] create error");
-                        failures_task.fetch_add(1, Ordering::Relaxed);
-                        return;
-                    }
+                // Write meta: [len: u32][crc: u32] (8 bytes little-endian)
+                let mut meta_buf = [0u8; 8];
+                {
+                    let mut meta_cursor = std::io::Cursor::new(&mut meta_buf[..]);
+                    let _ = meta_cursor.write_u32::<LittleEndian>(data.len() as u32);
+                    let _ = meta_cursor.write_u32::<LittleEndian>(crc);
+                }
+                
+                let write_result = match &mut writer {
+                    WriterType::Plain(w) => w.write_all(&meta_buf).and_then(|_| w.write_all(&data)),
+                    WriterType::Gzip(w) => w.write_all(&meta_buf).and_then(|_| w.write_all(&data)),
                 };
                 
-                // Create writer (with optional gzip)
-                if gzip {
-                    let gz_encoder = GzEncoder::new(file, Compression::default());
-                    let mut writer = BufWriter::with_capacity(DUMP_BUFFER_SIZE, gz_encoder);
-                    
-                    // Write entries
-                    for entry in entries {
-                        if ctx_task.is_cancelled() {
-                            break;
-                        }
-                        
-                        let data = entry.to_bytes();
-                        let crc = if crc32_control {
-                            let mut hasher = Hasher::new();
-                            hasher.update(&data);
-                            hasher.finalize()
-                        } else {
-                            0
-                        };
-                        
-                        // Write meta: [len: u32][crc: u32]
-                        let mut meta_buf = [0u8; 8];
-                        let mut meta_writer = std::io::Cursor::new(&mut meta_buf[..]);
-                        let _ = meta_writer.write_u32::<LittleEndian>(data.len() as u32);
-                        let _ = meta_writer.write_u32::<LittleEndian>(crc);
-                        
-                        if writer.write_all(&meta_buf).is_err() || writer.write_all(&data).is_err() {
-                            failures_task.fetch_add(1, Ordering::Relaxed);
-                            break;
-                        }
-                        
-                        success_task.fetch_add(1, Ordering::Relaxed);
-                    }
-                    
-                    // Flush writer
-                    if let Err(e) = writer.flush() {
-                        error!(file = %tmp_name.display(), error = %e, "[dump] flush error");
-                        failures_task.fetch_add(1, Ordering::Relaxed);
-                        return;
-                    }
-                    
-                    // Finish gzip encoder - extract from BufWriter and finish
-                    match writer.into_inner() {
+                if write_result.is_err() {
+                    failures_clone.fetch_add(1, Ordering::Relaxed);
+                    return false;
+                }
+                
+                success_clone.fetch_add(1, Ordering::Relaxed);
+                true
+            });
+            
+            // Flush BufWriter
+            let flush_result = match &mut writer {
+                WriterType::Plain(w) => w.flush(),
+                WriterType::Gzip(w) => w.flush(),
+            };
+            
+            if let Err(e) = flush_result {
+                error!(file = %tmp_name.display(), error = %e, "[dump] flush error");
+                failures_clone.fetch_add(1, Ordering::Relaxed);
+                return;
+            }
+            
+            // Finish gzip if needed
+            if gzip {
+                if let WriterType::Gzip(buf_writer) = writer {
+                    match buf_writer.into_inner() {
                         Ok(gz) => {
                             if let Err(e) = gz.finish() {
                                 error!(file = %tmp_name.display(), error = %e, "[dump] gzip finish error");
-                                failures_task.fetch_add(1, Ordering::Relaxed);
+                                failures_clone.fetch_add(1, Ordering::Relaxed);
                                 return;
                             }
-                        },
+                        }
                         Err(e) => {
-                            error!(file = %tmp_name.display(), error = ?e, "[dump] into_inner error");
-                            failures_task.fetch_add(1, Ordering::Relaxed);
+                            error!(file = %tmp_name.display(), error = ?e, "[dump] gzip into_inner error");
+                            failures_clone.fetch_add(1, Ordering::Relaxed);
                             return;
                         }
                     }
-                } else {
-                    let mut writer = BufWriter::with_capacity(DUMP_BUFFER_SIZE, file);
-                    
-                    // Write entries
-                    for entry in entries {
-                        if ctx_task.is_cancelled() {
-                            break;
-                        }
-                        
-                        let data = entry.to_bytes();
-                        let crc = if crc32_control {
-                            let mut hasher = Hasher::new();
-                            hasher.update(&data);
-                            hasher.finalize()
-                        } else {
-                            0
-                        };
-                        
-                        // Write meta: [len: u32][crc: u32]
-                        let mut meta_buf = [0u8; 8];
-                        let mut meta_writer = std::io::Cursor::new(&mut meta_buf[..]);
-                        let _ = meta_writer.write_u32::<LittleEndian>(data.len() as u32);
-                        let _ = meta_writer.write_u32::<LittleEndian>(crc);
-                        
-                        if writer.write_all(&meta_buf).is_err() || writer.write_all(&data).is_err() {
-                            failures_task.fetch_add(1, Ordering::Relaxed);
-                            break;
-                        }
-                        
-                        success_task.fetch_add(1, Ordering::Relaxed);
-                    }
-                    
-                    // Flush writer
-                    if let Err(e) = writer.flush() {
-                        error!(file = %tmp_name.display(), error = %e, "[dump] flush error");
-                        failures_task.fetch_add(1, Ordering::Relaxed);
-                        return;
-                    }
-                };
-                
-                // Rename tmp to final
-                if let Err(e) = fs::rename(&tmp_name, &name) {
-                    error!(file = %tmp_name.display(), error = %e, "[dump] rename error");
-                    failures_task.fetch_add(1, Ordering::Relaxed);
                 }
-            });
+            }
             
-            handles.push(handle);
-        }
-        
-        // Wait for all tasks
-        for handle in handles {
-            let _ = handle.await;
-        }
+            // Atomic rename: tmp -> final
+            if let Err(e) = fs::rename(&tmp_name, &name) {
+                error!(file = %tmp_name.display(), error = %e, "[dump] rename error");
+                failures_clone.fetch_add(1, Ordering::Relaxed);
+            }
+        }));
         
         // Rotate version dirs if needed
         if let Some(max_versions) = dump_cfg.max_versions {
@@ -357,8 +295,8 @@ impl DumperImpl {
         let storage_clone = self.storage.clone();
         let crc32_control = dump_cfg.crc32_control;
         
-        // Load each file
-        let mut handles: Vec<JoinHandle<()>> = Vec::new();
+        // Load each file in parallel
+        let mut handles: Vec<tokio::task::JoinHandle<()>> = Vec::new();
         
         for file in files {
             let file_clone = file.clone();
@@ -378,21 +316,24 @@ impl DumperImpl {
                     }
                 };
                 
-                // Create reader (with optional gzip)
-                let mut reader: Box<dyn Read> = if file_clone.to_string_lossy().ends_with(".gz") {
-                    Box::new(BufReader::with_capacity(DUMP_BUFFER_SIZE, GzDecoder::new(f)))
+                // Create reader pipeline: File -> optional GzDecoder -> BufReader(512KB)
+                let reader: Box<dyn Read> = if file_clone.to_string_lossy().ends_with(".gz") {
+                    match GzDecoder::new(f) {
+                        decoder => Box::new(BufReader::with_capacity(DUMP_BUFFER_SIZE, decoder))
+                    }
                 } else {
                     Box::new(BufReader::with_capacity(DUMP_BUFFER_SIZE, f))
                 };
+                let mut reader = reader;
                 
                 let mut meta_buf = [0u8; 8];
                 
                 loop {
                     if ctx_task.is_cancelled() {
-                        break;
+                        return;
                     }
                     
-                    // Read meta
+                    // Read meta: 8 bytes [len: u32][crc: u32]
                     match reader.read_exact(&mut meta_buf) {
                         Ok(_) => {}
                         Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => {
@@ -405,9 +346,10 @@ impl DumperImpl {
                         }
                     }
                     
-                    let mut meta_reader = std::io::Cursor::new(&meta_buf[..]);
-                    let sz = meta_reader.read_u32::<LittleEndian>().unwrap_or(0) as usize;
-                    let exp_crc = meta_reader.read_u32::<LittleEndian>().unwrap_or(0);
+                    // Parse meta
+                    let mut meta_cursor = std::io::Cursor::new(&meta_buf[..]);
+                    let sz = meta_cursor.read_u32::<LittleEndian>().unwrap_or(0) as usize;
+                    let exp_crc = meta_cursor.read_u32::<LittleEndian>().unwrap_or(0);
                     
                     // Read entry data
                     let mut buf = vec![0u8; sz];
@@ -439,7 +381,7 @@ impl DumperImpl {
                         }
                     };
                     
-                    // Store entry (synchronous call)
+                    // Store entry
                     storage_task.set(entry);
                     success_task.fetch_add(1, Ordering::Relaxed);
                 }
@@ -637,4 +579,3 @@ fn find_dump_files(dir: &Path, pattern: &str) -> Result<Vec<PathBuf>> {
     
     Ok(files)
 }
-
