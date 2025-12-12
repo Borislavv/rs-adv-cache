@@ -13,7 +13,6 @@ use super::service::{Config, Service};
 pub struct Orchestrator {
     // Use RwLock for async operations
     srvs_async: Arc<RwLock<HashMap<String, Arc<dyn Service>>>>,
-    // Use Mutex for sync operations (Governor trait methods) - matches Go's sync.Mutex
     srvs_sync: Arc<Mutex<HashMap<String, Arc<dyn Service>>>>,
 }
 
@@ -29,7 +28,6 @@ impl Orchestrator {
 
 impl Governor for Orchestrator {
     fn register(&self, name: String, s: Arc<dyn Service>) {
-        // Use sync Mutex for sync operations (matches Go's sync.Mutex)
         let mut srvs = self.srvs_sync.lock().unwrap();
         if srvs.contains_key(&name) {
             return;
@@ -48,7 +46,6 @@ impl Governor for Orchestrator {
     }
 
     fn cfg(&self, name: &str) -> Result<Arc<dyn Config>> {
-        // Use sync Mutex for sync operations
         let srvs = self.srvs_sync.lock().unwrap();
         if let Some(srv) = srvs.get(name) {
             Ok(srv.cfg())
@@ -58,7 +55,6 @@ impl Governor for Orchestrator {
     }
 
     fn on(&self, name: &str) -> Result<()> {
-        // Use sync Mutex for sync operations (matches Go's sync.Mutex)
         let srvs = self.srvs_sync.lock().unwrap();
         let srv = srvs.get(name)
             .ok_or_else(|| anyhow::anyhow!("orchestrator: no such {} service", name))?;
