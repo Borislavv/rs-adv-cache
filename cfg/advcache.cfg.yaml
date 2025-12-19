@@ -6,7 +6,7 @@ cache:
     level: "info"                # Log level: debug|info|warn|error. Prefer "info" in prod, "debug" for short bursts.
 
   runtime:
-    num_cpus: 0                  # 0 = auto max avilable cores. Set explicit N to cap CPU usage.
+    num_cpus: 0                  # 0 = auto max available cores. Set explicit N to cap CPU usage.
 
   api:
     name: "adv_cache"            # Human-readable service name exposed in API/metrics.
@@ -24,7 +24,7 @@ cache:
       timeout: "10s"              # Base timeout for upstream requests.
       max_timeout: "1m"           # Hard cap if “slow path” header allows extending timeouts.
       use_max_timeout_header: ""  # If non-empty, presence of this header lifts timeout to max_timeout.
-      healthcheck: "/healthcheck" # Liveness probe path; 2xx = healthy.
+      healthcheck: "/healthz"     # Liveness probe path; 2xx = healthy.
 
   # Compression
   # - Supported levels:
@@ -51,7 +51,7 @@ cache:
 
   storage:
     mode: listing                 # Implementation of LRU algo through per-shard lists or Redis style sampling (values=sampling/listing).
-    size: 53687091200             # Max memory budget for storage (bytes). Here: 50 GiB.
+    size: 10737418240             # Max memory budget for storage (bytes). Here: 50 GiB.
 
   admission:
     enabled: false
@@ -78,7 +78,7 @@ cache:
     coefficient: 0.25             # Start refresh/remove attempts at TTL × coefficient (e.g., 0.5 = at 50% of TTL).
 
   traces:
-    enabled: true
+    enabled: false
     service_name: "adv_cache"
     service_version: "prod"
     exporter: "http"              # "stdout" | "grpc" (OTLP/4317) | "http" (OTLP/4318)
