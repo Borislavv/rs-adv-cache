@@ -445,37 +445,6 @@ cargo test --lib
 
 # Run integration tests
 cargo test --test e2e
-
-# Run specific test
-cargo test test_proxy_forwarded_host_passed_to_upstream
-```
-
-### Code Quality
-
-```bash
-# Format code
-cargo fmt
-
-# Lint code
-cargo clippy -- -D warnings
-
-# Check for security vulnerabilities
-cargo audit
-```
-
-### Profiling
-
-For performance analysis and memory profiling:
-
-```bash
-# Build with debug symbols
-cargo build --release
-
-# Profile with perf
-perf record --call-graph dwarf ./target/release/advcache -cfg ./cfg/advcache.cfg.yaml
-
-# Analyze with flamegraph
-cargo flamegraph -- ./target/release/advcache -cfg ./cfg/advcache.cfg.yaml
 ```
 
 ### Project Structure
