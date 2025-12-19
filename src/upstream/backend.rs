@@ -268,6 +268,7 @@ impl Upstream for BackendImpl {
             Err(e) => {
                 // Record error in span
                 if let Some(ref span) = span {
+                    let e: anyhow::Error = e;
                     upstream_trace::record_error_in_span(span, e.as_ref() as &dyn std::error::Error);
                 }
                 Err(e).context("Request failed")
