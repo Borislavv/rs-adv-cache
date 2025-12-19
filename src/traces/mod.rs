@@ -2,15 +2,14 @@ pub mod tracer;
 
 // Re-export commonly used functions and constants
 pub use tracer::{
-    is_active_tracing, enable_tracing, disable_tracing,
-    ATTR_HTTP_STATUS_CODE_KEY, ATTR_HTTP_RESPONSE_SIZE_KEY,
-    ATTR_CACHE_PROXY, ATTR_CACHE_HIT, ATTR_CACHE_KEY,
-    ATTR_CACHE_IS_ERR, extract,
+    disable_tracing, enable_tracing, extract, is_active_tracing, ATTR_CACHE_HIT, ATTR_CACHE_IS_ERR,
+    ATTR_CACHE_KEY, ATTR_CACHE_PROXY,
+    ATTR_HTTP_RESPONSE_SIZE_KEY, ATTR_HTTP_STATUS_CODE_KEY,
 };
 
+use crate::config::Traces;
 use anyhow::Result;
 use tokio_util::sync::CancellationToken;
-use crate::config::Traces;
 
 /// Applies tracing configuration and returns a shutdown function.
 pub fn apply(
@@ -19,4 +18,3 @@ pub fn apply(
 ) -> Box<dyn Fn(CancellationToken) -> Result<()> + Send + Sync> {
     tracer::apply(shutdown_token, cfg)
 }
-
