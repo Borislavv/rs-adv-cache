@@ -4,9 +4,6 @@
 public/dump/*
 *.local.yaml
 main
-/advcache
-/upstream
-upstream*
 /target
 /.cursor
 /src/scripts/stress/check_resps/target

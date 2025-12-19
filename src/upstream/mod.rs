@@ -14,6 +14,7 @@ mod proxy_test;
 
 #[cfg(test)]
 mod backend_hyper_impl_test;
+mod backend_header;
 
 // Re-export main types
 pub use backend::BackendImpl;
