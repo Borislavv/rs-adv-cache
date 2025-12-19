@@ -1,4 +1,5 @@
-// Package workers provides worker configuration.
+//! Worker configuration.
+//
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -113,5 +114,8 @@ impl Config for WorkerConfig {
             freq,
         })
     }
-}
 
+    fn clone_config(&self) -> Arc<dyn Config> {
+        Arc::new(self.clone())
+    }
+}

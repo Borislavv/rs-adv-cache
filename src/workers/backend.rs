@@ -1,4 +1,5 @@
-// Package workers exposes backend interfaces used by worker groups.
+//! Backend interfaces for worker groups.
+//
 
 use crate::model::Entry;
 use anyhow::Result;
@@ -31,6 +32,8 @@ pub trait RefreshBackend: Send + Sync {
     fn peek_expired_ttl(&self) -> Option<Entry>;
 
     /// Handles TTL expiration for an entry.
-    async fn on_ttl(&self, entry: &mut Entry) -> Result<(), Box<dyn std::error::Error + Send + Sync>>;
+    async fn on_ttl(
+        &self,
+        entry: &Entry,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>>;
 }
-
