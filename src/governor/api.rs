@@ -1,4 +1,5 @@
-// Package orchestrator provides the Governor interface.
+//! The Governor interface.
+//
 
 use anyhow::Result;
 
@@ -29,6 +30,5 @@ pub trait Governor: Send + Sync {
     fn scale_to(&self, name: &str, n: usize) -> Result<()>;
 
     /// Stops all services.
-    async fn stop(&self);
+    fn stop(&self);
 }
-

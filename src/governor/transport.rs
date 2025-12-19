@@ -1,8 +1,8 @@
-// Package governor provides transport for service communication.
+//! Transport for service communication.
 
+use async_trait::async_trait;
 use std::sync::Arc;
 use tokio::sync::mpsc;
-use async_trait::async_trait;
 
 use super::service::Config;
 
@@ -14,22 +14,22 @@ const RETRIES: usize = 5;
 #[async_trait]
 pub trait Transport: Send + Sync {
     /// Sends a start signal.
-    async fn start(&self) -> bool;
+    fn start(&self) -> bool;
 
     /// Sends an on signal.
-    async fn on(&self) -> bool;
+    fn on(&self) -> bool;
 
     /// Sends an off signal.
-    async fn off(&self) -> bool;
+    fn off(&self) -> bool;
 
     /// Sends a reload signal with configuration.
-    async fn reload(&self, cfg: Arc<dyn Config>) -> bool;
+    fn reload(&self, cfg: Arc<dyn Config>) -> bool;
 
     /// Sends a scale signal with replica count.
-    async fn scale_to(&self, n: usize) -> bool;
+    fn scale_to(&self, n: usize) -> bool;
 
     /// Sends a stop signal.
-    async fn stop(&self) -> bool;
+    fn stop(&self) -> bool;
 
     /// Waits for a start signal.
     async fn on_start(&self) -> ();
@@ -111,28 +111,27 @@ impl ChanneledTransport {
 
 #[async_trait]
 impl Transport for ChanneledTransport {
-    async fn start(&self) -> bool {
-        // Synchronous operation, but wrapped in async for dyn compatibility
+    fn start(&self) -> bool {
         Self::try_retry(|| Self::try_send(&self.start_tx, ()))
     }
 
-    async fn on(&self) -> bool {
+    fn on(&self) -> bool {
         Self::try_retry(|| Self::try_send(&self.on_tx, ()))
     }
 
-    async fn off(&self) -> bool {
+    fn off(&self) -> bool {
         Self::try_retry(|| Self::try_send(&self.off_tx, ()))
     }
 
-    async fn reload(&self, cfg: Arc<dyn Config>) -> bool {
+    fn reload(&self, cfg: Arc<dyn Config>) -> bool {
         Self::try_retry(|| Self::try_send(&self.reload_tx, cfg.clone()))
     }
 
-    async fn scale_to(&self, n: usize) -> bool {
+    fn scale_to(&self, n: usize) -> bool {
         Self::try_retry(|| Self::try_send(&self.scale_tx, n))
     }
 
-    async fn stop(&self) -> bool {
+    fn stop(&self) -> bool {
         Self::try_retry(|| Self::try_send(&self.stop_tx, ()))
     }
 
@@ -153,16 +152,8 @@ impl Transport for ChanneledTransport {
 
     async fn on_reload(&self) -> Arc<dyn Config> {
         let mut rx = self.reload_rx.lock().await;
-        rx.recv().await.unwrap_or_else(|| {
-            // Return a default config if channel is closed
-            use crate::governor::Config;
-            use crate::workers::{CallFreq, WorkerConfig};
-            Arc::new(WorkerConfig::new(
-                false,
-                Arc::new(CallFreq::new(0, std::time::Duration::ZERO)),
-                0,
-            )) as Arc<dyn Config>
-        })
+        // If channel is closed, this is a logic error; propagate empty config to terminate loop.
+        rx.recv().await.expect("reload channel closed unexpectedly")
     }
 
     async fn on_scale_to(&self) -> usize {

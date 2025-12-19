@@ -1,4 +1,5 @@
-// Package orchestrator provides service interfaces.
+//! Service interfaces.
+//
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -51,6 +52,10 @@ pub trait Config: Send + Sync {
 
     /// Sets the frequency configuration and returns a new Config.
     fn set_freq(&self, freq: Arc<dyn Freq>) -> Arc<dyn Config>;
+
+    /// Clones the Config.
+    #[allow(dead_code)]
+    fn clone_config(&self) -> Arc<dyn Config>;
 }
 
 /// Service is implemented by a worker group (evictor, refresher, logger, ...).
@@ -71,4 +76,3 @@ pub trait Service: Send + Sync {
     /// Gets the transport for the service.
     fn transport(&self) -> Arc<dyn Transport>;
 }
-

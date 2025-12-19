@@ -1,176 +1,102 @@
-// Package orchestrator provides service orchestration functionality.
+//! Service orchestration functionality.
 
-use anyhow::{Result};
+use anyhow::Result;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
-use tokio::sync::RwLock;
 use tracing::{error, info};
 
 use super::api::Governor;
 use super::service::{Config, Service};
+use super::transport::ChanneledTransport;
 
 /// Orchestrator manages services and their lifecycle.
 pub struct Orchestrator {
-    // Use RwLock for async operations
-    srvs_async: Arc<RwLock<HashMap<String, Arc<dyn Service>>>>,
-    srvs_sync: Arc<Mutex<HashMap<String, Arc<dyn Service>>>>,
+    srvs: Mutex<HashMap<String, Arc<dyn Service>>>,
 }
 
 impl Orchestrator {
     /// Creates a new Orchestrator.
     pub fn new() -> Self {
         Self {
-            srvs_async: Arc::new(RwLock::new(HashMap::with_capacity(8))),
-            srvs_sync: Arc::new(Mutex::new(HashMap::with_capacity(8))),
+            srvs: Mutex::new(HashMap::with_capacity(8)),
         }
+    }
+
+    fn with_srv<F, T>(&self, name: &str, f: F) -> Result<T>
+    where
+        F: FnOnce(&Arc<dyn Service>) -> Result<T>,
+    {
+        let srvs = self.srvs.lock().unwrap();
+        let srv = srvs
+            .get(name)
+            .ok_or_else(|| anyhow::anyhow!("orchestrator: no such {} service", name))?;
+        f(srv)
+    }
+
+    fn send_signal<F>(&self, name: &str, action: &'static str, send: F) -> Result<()>
+    where
+        F: FnOnce(&Arc<dyn super::transport::Transport>) -> bool,
+    {
+        self.with_srv(name, |srv| {
+            let transport = srv.transport();
+            if !send(&transport) {
+                Err(anyhow::anyhow!(format!(
+                    "orchestrator: cannot {action} {}, signal was not sent",
+                    srv.name()
+                )))
+            } else {
+                info!(srv = %srv.name(), action = action, "orchestrator: action sent");
+                Ok(())
+            }
+        })
     }
 }
 
 impl Governor for Orchestrator {
     fn register(&self, name: String, s: Arc<dyn Service>) {
-        let mut srvs = self.srvs_sync.lock().unwrap();
+        let mut srvs = self.srvs.lock().unwrap();
         if srvs.contains_key(&name) {
             return;
         }
-        let transport = super::transport::ChanneledTransport::new();
+
+        let transport = ChanneledTransport::new();
         s.serve(transport.clone());
-        srvs.insert(name.clone(), s.clone());
-        // Also update async map for async operations
-        let srvs_async = self.srvs_async.clone();
-        let name_clone = name.clone();
-        let s_clone = s.clone();
-        tokio::runtime::Handle::current().spawn(async move {
-            let mut srvs_guard = srvs_async.write().await;
-            srvs_guard.insert(name_clone, s_clone);
-        });
+        srvs.insert(name, s);
     }
 
     fn cfg(&self, name: &str) -> Result<Arc<dyn Config>> {
-        let srvs = self.srvs_sync.lock().unwrap();
-        if let Some(srv) = srvs.get(name) {
-            Ok(srv.cfg())
-        } else {
-            Err(anyhow::anyhow!("orchestrator: no such {} service", name))
-        }
+        self.with_srv(name, |srv| Ok(srv.cfg()))
     }
 
     fn on(&self, name: &str) -> Result<()> {
-        let srvs = self.srvs_sync.lock().unwrap();
-        let srv = srvs.get(name)
-            .ok_or_else(|| anyhow::anyhow!("orchestrator: no such {} service", name))?;
-        
-        // Transport methods are async for dyn compatibility, but do synchronous work
-        // Use std::thread::spawn to avoid blocking the runtime thread
-        let transport = srv.transport();
-        let handle = tokio::runtime::Handle::current();
-        let result = std::thread::scope(|scope| {
-            scope.spawn(|| {
-                handle.block_on(transport.on())
-            }).join().unwrap()
-        });
-        if !result {
-            Err(anyhow::anyhow!("orchestrator: cannot turn on {}, signal was not sent", srv.name()))
-        } else {
-            info!(srv = %srv.name(), "orchestrator: turning on...");
-            Ok(())
-        }
+        self.send_signal(name, "turning on", |t| t.on())
     }
 
     fn off(&self, name: &str) -> Result<()> {
-        let srvs = self.srvs_sync.lock().unwrap();
-        let srv = srvs.get(name)
-            .ok_or_else(|| anyhow::anyhow!("orchestrator: no such {} service", name))?;
-        
-        let transport = srv.transport();
-        let handle = tokio::runtime::Handle::current();
-        let result = std::thread::scope(|scope| {
-            scope.spawn(|| {
-                handle.block_on(transport.off())
-            }).join().unwrap()
-        });
-        if !result {
-            Err(anyhow::anyhow!("orchestrator: cannot turn off {}, signal was not sent", srv.name()))
-        } else {
-            info!(srv = %srv.name(), "orchestrator: turning off...");
-            Ok(())
-        }
+        self.send_signal(name, "turning off", |t| t.off())
     }
 
     fn start(&self, name: &str) -> Result<()> {
-        let srvs = self.srvs_sync.lock().unwrap();
-        let srv = srvs.get(name)
-            .ok_or_else(|| anyhow::anyhow!("orchestrator: no such {} service", name))?;
-        
-        let transport = srv.transport();
-        let handle = tokio::runtime::Handle::current();
-        let result = std::thread::scope(|scope| {
-            scope.spawn(|| {
-                handle.block_on(transport.start())
-            }).join().unwrap()
-        });
-        if !result {
-            Err(anyhow::anyhow!("orchestrator: cannot start {}, signal was not sent", srv.name()))
-        } else {
-            info!(srv = %srv.name(), "orchestrator: starting...");
-            Ok(())
-        }
+        self.send_signal(name, "starting", |t| t.start())
     }
 
     fn reload(&self, name: &str, cfg: Arc<dyn Config>) -> Result<()> {
-        let srvs = self.srvs_sync.lock().unwrap();
-        let srv = srvs.get(name)
-            .ok_or_else(|| anyhow::anyhow!("orchestrator: no such {} service", name))?;
-        
-        let transport = srv.transport();
-        let handle = tokio::runtime::Handle::current();
-        let cfg_clone = cfg.clone();
-        let result = std::thread::scope(|scope| {
-            scope.spawn(|| {
-                handle.block_on(transport.reload(cfg_clone))
-            }).join().unwrap()
-        });
-        if !result {
-            Err(anyhow::anyhow!("orchestrator: cannot reload {}, signal was not sent", srv.name()))
-        } else {
-            info!(srv = %srv.name(), "orchestrator: reloading...");
-            Ok(())
-        }
+        self.send_signal(name, "reloading", move |t| t.reload(cfg.clone()))
     }
 
     fn scale_to(&self, name: &str, n: usize) -> Result<()> {
-        let srvs = self.srvs_sync.lock().unwrap();
-        let srv = srvs.get(name)
-            .ok_or_else(|| anyhow::anyhow!("orchestrator: no such {} service", name))?;
-        
-        let transport = srv.transport();
-        let handle = tokio::runtime::Handle::current();
-        let result = std::thread::scope(|scope| {
-            scope.spawn(|| {
-                handle.block_on(transport.scale_to(n))
-            }).join().unwrap()
-        });
-        if !result {
-            Err(anyhow::anyhow!("orchestrator: cannot scale {}, signal was not sent", name))
-        } else {
-            info!(srv = %name, need_replicas = n, "orchestrator: scaling...");
-            Ok(())
-        }
+        self.send_signal(name, "scaling", move |t| t.scale_to(n))
     }
 
-    async fn stop(&self) {
-        let srvs = self.srvs_sync.lock().unwrap();
-        for (name, srv) in srvs.iter() {
+    fn stop(&self) {
+        let srvs = self.srvs.lock().unwrap();
+        for srv in srvs.values() {
             let transport = srv.transport();
-            let handle = tokio::runtime::Handle::current();
-            let result = std::thread::scope(|scope| {
-                scope.spawn(|| {
-                    handle.block_on(transport.stop())
-                }).join().unwrap()
-            });
-            if !result {
-                error!(srv = %name, "orchestrator: cannot stop, signal was not sent");
+            let ok = transport.stop();
+            if !ok {
+                error!(srv = %srv.name(), "orchestrator: cannot stop, signal was not sent");
             } else {
-                info!(srv = %name, "orchestrator: stopping...");
+                info!(srv = %srv.name(), "orchestrator: stopping...");
             }
         }
     }

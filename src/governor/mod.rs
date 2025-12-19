@@ -1,4 +1,4 @@
-// Package orchestrator provides service orchestration functionality.
+//! Service orchestration and worker lifecycle management.
 
 pub mod api;
 pub mod governor;
@@ -9,4 +9,3 @@ pub use api::Governor;
 pub use governor::Orchestrator;
 pub use service::{Config, Freq, Service};
 pub use transport::Transport;
-
