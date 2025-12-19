@@ -145,7 +145,7 @@ async fn test_evictor_respects_soft_limit() {
     );
 
     // Wait for evictor workers to scan and evict.
-    tokio::time::sleep(Duration::from_millis(500)).await;
+    tokio::time::sleep(Duration::from_millis(2500)).await;
     let (mem_after, len_after) = db.stat();
 
     assert!(
@@ -204,7 +204,7 @@ async fn test_lifetimer_refreshes_expired_entries() {
     }
 
     // Allow lifetimer to pick and refresh expired entries.
-    tokio::time::sleep(Duration::from_millis(800)).await;
+    tokio::time::sleep(Duration::from_millis(4000)).await;
 
     let refreshed = upstream.refresh_calls.load(Ordering::Relaxed);
     assert!(

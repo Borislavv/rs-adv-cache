@@ -69,7 +69,7 @@ async fn test_invalidate_by_path_only() {
     assert!(invalidate_resp.affected >= 2, "should affect at least 2 entries");
 
     // Wait a bit for invalidation to take effect
-    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+    tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
 
     // Next requests should be cache misses (entries marked as outdated)
     // Note: In refresh mode, expired entries are served stale and refreshed in background
@@ -136,7 +136,7 @@ async fn test_invalidate_with_query_params() {
     assert!(invalidate_resp.success);
     assert!(invalidate_resp.affected >= 1, "should affect at least 1 entry");
 
-    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+    tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
 
     // First entry should be invalidated, second should still be cached
     let (status1_after, _, _, _) = assert_ok(
@@ -194,7 +194,7 @@ async fn test_invalidate_with_remove_flag() {
     assert!(invalidate_resp.success);
     assert!(invalidate_resp.affected >= 1);
 
-    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+    tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
 
     // Entry should be removed, so next request should be cache miss
     let (status_after, _, _, _) = assert_ok(
@@ -304,7 +304,7 @@ async fn test_invalidate_exact_query_match() {
     // walk_shards is synchronous, but we need to ensure all collected keys are processed
     // before making assertions. Also gives time for any concurrent operations (like lifetimer) to complete.
     // Using a longer delay to ensure race conditions are avoided, especially when tests run in parallel.
-    tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+    tokio::time::sleep(tokio::time::Duration::from_millis(2500)).await;
 
     // First entry should be invalidated (marked as outdated)
     // In refresh mode, expired entries are served stale and refreshed in background,

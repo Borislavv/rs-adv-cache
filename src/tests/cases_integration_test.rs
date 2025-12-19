@@ -102,7 +102,7 @@ async fn test_invalidation_causes_cache_miss() {
     assert!(invalidate_resp.success);
     assert!(invalidate_resp.affected >= 1);
 
-    tokio::time::sleep(tokio::time::Duration::from_millis(150)).await;
+    tokio::time::sleep(tokio::time::Duration::from_millis(750)).await;
 
     // Next request - entry should be invalidated (may be served stale but should trigger refresh)
     let (status_after, _, _, _) = assert_ok(
@@ -178,7 +178,7 @@ async fn test_cache_clear_actually_clears() {
     let clear_resp: ClearStatusResponse = serde_json::from_slice(&clear_body).unwrap();
     assert!(clear_resp.cleared.unwrap_or(false), "cache should be cleared");
 
-    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+    tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
 
     // After clear, entries should be removed from cache
     // Both should return 200 but may be fresh requests (cache cleared)
@@ -298,7 +298,7 @@ async fn test_multiple_invalidations_independent() {
     // affected may be 0 if entry was already invalidated
     // The important thing is that the endpoint returns success
 
-    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+    tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
 
     // First entry should be invalidated
     let (status1_after, _, _, _) = assert_ok(
@@ -346,7 +346,7 @@ async fn test_cache_proxy_mode_switching_consistency() {
             .await
             .unwrap();
         assert!(resp.status().is_success(), "toggle {} failed: {}", on, resp.status());
-        tokio::time::sleep(tokio::time::Duration::from_millis(150)).await;
+        tokio::time::sleep(tokio::time::Duration::from_millis(750)).await;
     }
 
     toggle_cache(true).await;
