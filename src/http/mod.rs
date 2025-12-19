@@ -19,4 +19,3 @@ pub use server::{HttpServer, Server};
 
 // Common controller interface
 pub use crate::controller::controller::Controller;
-
