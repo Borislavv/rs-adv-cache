@@ -4,19 +4,26 @@ use anyhow::Result;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
-use tracing::error;
 
 use crate::config::{Config, ConfigTrait};
+use crate::governor::Governor;
 use crate::http::{Controller, Middleware, Server as HttpServerTrait};
 use crate::liveness;
-use crate::governor::Governor;
-use crate::storage::Storage;
+use crate::db::Storage;
 use crate::upstream::Upstream;
+
+/// Trait for HTTP server lifecycle management.
+#[async_trait::async_trait]
+pub trait Http: Send + Sync {
+    /// Starts the HTTP server (blocking).
+    async fn listen_and_serve(&self) -> Result<()>;
+
+    /// Checks if the server is alive.
+    fn is_alive(&self) -> bool;
+}
 
 /// HTTP server implementation that wraps all dependencies.
 pub struct HttpServer {
-    #[allow(dead_code)]
-    ctx: CancellationToken,
     server: Arc<dyn HttpServerTrait>,
     is_server_alive: Arc<AtomicBool>,
 }
@@ -30,13 +37,19 @@ impl HttpServer {
         db: Arc<dyn Storage>,
         backend: Arc<dyn Upstream>,
         governor: Arc<dyn Governor>,
-        probe: Arc<liveness::Probe>,
+        probe: Arc<dyn liveness::Prober>,
     ) -> Result<Self> {
         // Initialize HTTP server with all controllers and middlewares.
-        let server = Self::make_http_server(ctx.clone(), &cfg, db.clone(), backend.clone(), governor.clone(), probe.clone())?;
+        let server = Self::make_http_server(
+            ctx.clone(),
+            &cfg,
+            db.clone(),
+            backend.clone(),
+            governor.clone(),
+            probe.clone(),
+        )?;
 
         Ok(Self {
-            ctx,
             server,
             is_server_alive: Arc::new(AtomicBool::new(false)),
         })
@@ -50,19 +63,12 @@ impl HttpServer {
     /// Starts the HTTP server (blocking call).
     pub async fn listen_and_serve(&self) -> Result<()> {
         self.is_server_alive.store(true, Ordering::Relaxed);
-        
+
         // Start server in a way that we can track its lifecycle
         let result = self.server.listen_and_serve().await;
-        
+
         self.is_server_alive.store(false, Ordering::Relaxed);
         result
-    }
-
-    /// Closes the HTTP server.
-    #[allow(dead_code)]
-    pub fn close(&self) -> Result<()> {
-        self.ctx.cancel();
-        Ok(())
     }
 
     /// Creates the HTTP server instance with controllers and middlewares.
@@ -72,9 +78,16 @@ impl HttpServer {
         db: Arc<dyn Storage>,
         backend: Arc<dyn Upstream>,
         governor: Arc<dyn Governor>,
-        probe: Arc<liveness::Probe>,
+        probe: Arc<dyn liveness::Prober>,
     ) -> Result<Arc<dyn HttpServerTrait>> {
-        let controllers = Self::controllers(ctx.clone(), cfg, db.clone(), backend.clone(), governor.clone(), probe.clone());
+        let controllers = Self::controllers(
+            ctx.clone(),
+            cfg,
+            db.clone(),
+            backend.clone(),
+            governor.clone(),
+            probe.clone(),
+        );
         let middlewares = Self::middlewares(cfg);
 
         // Compose server with controllers and middlewares.
@@ -89,10 +102,10 @@ impl HttpServer {
         db: Arc<dyn Storage>,
         backend: Arc<dyn Upstream>,
         governor: Arc<dyn Governor>,
-        probe: Arc<liveness::Probe>,
+        probe: Arc<dyn liveness::Prober>,
     ) -> Vec<Box<dyn Controller>> {
         use crate::controller;
-        
+
         vec![
             // Healthcheck probe endpoint
             Box::new(controller::LivenessProbeController::new(probe.clone())),
@@ -131,9 +144,22 @@ impl HttpServer {
             // Exec first - panic recovery
             Box::new(crate::middleware::recover_middleware::PanicRecoverMiddleware::new()),
             // Exec second - compression
-            Box::new(crate::middleware::compression_middleware::CompressionMiddleware::new(
-                cfg.compression().cloned()
-            )),
+            Box::new(
+                crate::middleware::compression_middleware::CompressionMiddleware::new(
+                    cfg.compression().cloned(),
+                ),
+            ),
         ]
+    }
+}
+
+#[async_trait::async_trait]
+impl Http for HttpServer {
+    async fn listen_and_serve(&self) -> Result<()> {
+        HttpServer::listen_and_serve(self).await
+    }
+
+    fn is_alive(&self) -> bool {
+        HttpServer::is_alive(self)
     }
 }
