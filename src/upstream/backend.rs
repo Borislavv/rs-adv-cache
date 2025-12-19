@@ -255,8 +255,7 @@ impl Upstream for BackendImpl {
                 // Process headers directly from response (optimized)
                 let response_headers = process_response_headers(&response_headers_map, Some(rule));
                 
-                // Be explicit to avoid type inference issues across different `Bytes` implementations.
-                let body: Vec<u8> = body.as_ref().to_vec();
+                let body: Vec<u8> = body.to_vec();
                 let response_size: usize = body.len();
                 
                 // Record response in span
@@ -271,7 +270,7 @@ impl Upstream for BackendImpl {
                 
                 // Record error in span
                 if let Some(ref span) = span {
-                    upstream_trace::record_error_in_span(span, e.as_ref());
+                    upstream_trace::record_error_in_span(span, e.as_ref() as &dyn std::error::Error);
                 }
                 Err(e).context("Request failed")
             }
@@ -360,7 +359,7 @@ impl Upstream for BackendImpl {
             Err(e) => {
                 // Record error in span
                 if let Some(ref span) = span {
-                    upstream_trace::record_error_in_span(span, e.as_ref());
+                    upstream_trace::record_error_in_span(span, e.as_ref() as &dyn std::error::Error);
                 }
                 Err(e).context("Request failed")
             }
@@ -426,7 +425,7 @@ impl Upstream for BackendImpl {
         let timeout_duration = self.cfg.timeout.unwrap_or(Duration::from_secs(10));
         
         use crate::upstream::backend_hyper_impl::make_get_request;
-        let (status, _, _) = make_get_request(&self.client, uri, Vec::<(&str, &str)>::new(), timeout_duration, None)
+        let (status, _, _) = make_get_request(&self.client, uri, Vec::new(), timeout_duration, None)
             .await
             .with_context(|| format!("Health check failed for URL: {}", url))?;
 

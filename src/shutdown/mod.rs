@@ -6,7 +6,7 @@ use std::time::Duration;
 use tokio::signal;
 use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
-use tracing::{info, warn};
+use tracing::{error, info, warn};
 
 #[derive(Debug, thiserror::Error)]
 #[error("graceful shutdown timeout exceeded")]
