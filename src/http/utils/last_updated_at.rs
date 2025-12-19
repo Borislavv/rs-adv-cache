@@ -1,6 +1,6 @@
-// Package http provides Last-Updated-At header functionality.
+//! Last-Updated-At header functionality.
 
-use std::time::{SystemTime, UNIX_EPOCH, Duration};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 /// Last-Updated-At header key.
 pub const LAST_UPDATED_AT_KEY: &str = "Last-Updated-At";
@@ -12,7 +12,6 @@ pub fn set_last_updated_at_value(unix_nano: i64) -> Option<String> {
         return None;
     }
 
-    // Convert nanoseconds since epoch to SystemTime
     let duration = Duration::from_nanos(unix_nano as u64);
     let time = UNIX_EPOCH + duration;
 
@@ -25,7 +24,6 @@ pub fn set_last_updated_at_value(unix_nano: i64) -> Option<String> {
 fn format_rfc1123(time: SystemTime) -> Option<String> {
     use chrono::{DateTime, Utc};
 
-    // Convert SystemTime to DateTime<Utc>
     let datetime: DateTime<Utc> = match time.duration_since(UNIX_EPOCH) {
         Ok(duration) => {
             let secs = duration.as_secs() as i64;
@@ -35,7 +33,5 @@ fn format_rfc1123(time: SystemTime) -> Option<String> {
         Err(_) => return None,
     }?;
 
-    // Format as RFC 1123
     Some(datetime.format("%a, %d %b %Y %H:%M:%S GMT").to_string())
 }
-
