@@ -12,4 +12,3 @@ impl fmt::Display for TimeoutIsTooShortError {
 }
 
 impl std::error::Error for TimeoutIsTooShortError {}
-

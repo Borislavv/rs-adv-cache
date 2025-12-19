@@ -1,15 +1,15 @@
-// Package liveness provides the Prober trait for liveness checking.
+// Liveness prober trait.
+//
+
+use std::sync::Arc;
 
 use super::Service;
 
 /// Prober can handle services/applications.
 pub trait Prober: Send + Sync {
-    /// Watches services for liveness.
-    fn watch(&mut self, services: Vec<Box<dyn Service>>);
+    /// Registers services to be checked.
+    fn watch(&self, services: Vec<Arc<dyn Service>>);
 
     /// Checks whether the target service is alive (synchronous version).
-    /// 
-    /// This is a blocking call that internally uses async runtime.
-    fn is_alive(&mut self) -> bool;
+    fn is_alive(&self) -> bool;
 }
-
