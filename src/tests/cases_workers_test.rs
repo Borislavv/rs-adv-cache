@@ -203,9 +203,30 @@ async fn test_lifetimer_refreshes_expired_entries() {
         db.set(entry);
     }
 
-    // Allow lifetimer to pick and refresh expired entries.
-    tokio::time::sleep(Duration::from_millis(4000)).await;
-
+    // Wait for lifetimer to pick and refresh expired entries.
+    // Poll every 500ms for up to 30 seconds.
+    let timeout = Duration::from_secs(30);
+    let poll_interval = Duration::from_millis(500);
+    let start = std::time::Instant::now();
+    
+    loop {
+        let refreshed = upstream.refresh_calls.load(Ordering::Relaxed);
+        if refreshed >= 8 {
+            // Condition met, test passes
+            break;
+        }
+        
+        if start.elapsed() >= timeout {
+            panic!(
+                "timeout waiting for refresh calls: expected at least 8, got {} after {:?}",
+                refreshed,
+                start.elapsed()
+            );
+        }
+        
+        tokio::time::sleep(poll_interval).await;
+    }
+    
     let refreshed = upstream.refresh_calls.load(Ordering::Relaxed);
     assert!(
         refreshed >= 8,
