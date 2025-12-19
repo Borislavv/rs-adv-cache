@@ -36,7 +36,7 @@ fn make_rule(path: &str, ttl: Option<Duration>) -> Arc<Rule> {
 fn make_entry(rule: Arc<Rule>, id: usize, body_size: usize) -> Entry {
     let query = format!("id-{id}");
     let queries = vec![(b"user[id]".to_vec(), query.into_bytes())];
-    let mut entry = Entry::new(rule, &queries, &[]);
+    let entry = Entry::new(rule, &queries, &[]);
     let resp = ModelResponse {
         status: 200,
         headers: vec![("content-type".to_string(), "application/json".to_string())],

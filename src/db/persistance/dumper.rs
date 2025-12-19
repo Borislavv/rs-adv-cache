@@ -5,7 +5,7 @@ use std::sync::Arc;
 use tokio::fs;
 use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
-use tracing::{error, info, warn};
+use tracing::{info, warn};
 use std::sync::atomic::{AtomicI32, Ordering};
 use flate2::Compression;
 use flate2::read::GzDecoder;

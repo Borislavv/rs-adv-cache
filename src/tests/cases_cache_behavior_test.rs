@@ -20,7 +20,7 @@ async fn test_cache_query_order_independence() {
     headers.insert("Accept-Encoding".to_string(), "identity".to_string());
 
     // First request with one order
-    let (status1, _, body1, _) = assert_ok(
+    let (status1, _, _body1, _) = assert_ok(
         do_json::<serde_json::Value>("GET", &format!("{}{}", base, path1), &headers).await,
     );
     assert_equal(200, status1);
@@ -53,7 +53,7 @@ async fn test_cache_respects_accept_encoding_in_key() {
     // Request with identity encoding
     let mut headers1 = H::new();
     headers1.insert("Accept-Encoding".to_string(), "identity".to_string());
-    let (status1, _, body1, _) = assert_ok(
+    let (status1, _, _body1, _) = assert_ok(
         do_json::<serde_json::Value>("GET", &format!("{}{}", base, path), &headers1).await,
     );
     assert_equal(200, status1);
@@ -61,7 +61,7 @@ async fn test_cache_respects_accept_encoding_in_key() {
     // Request with gzip encoding - should be different cache key
     let mut headers2 = H::new();
     headers2.insert("Accept-Encoding".to_string(), "gzip".to_string());
-    let (status2, _, body2, _) = assert_ok(
+    let (status2, _, _body2, _) = assert_ok(
         do_json::<serde_json::Value>("GET", &format!("{}{}", base, path), &headers2).await,
     );
     assert_equal(200, status2);

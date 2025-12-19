@@ -311,7 +311,7 @@ async fn test_invalidate_exact_query_match() {
     // so body might be same (stale served) or new (refreshed), but entry should be marked as outdated.
     // We verify it was invalidated by checking that it's no longer a cache hit with the original body
     // (either served stale or refreshed, but marked as outdated)
-    let (status1_after, _, body1_after, _) = assert_ok(
+    let (status1_after, _, _body1_after, _) = assert_ok(
         do_json::<serde_json::Value>("GET", &format!("{}{}", base, path1), &headers).await,
     );
     assert_equal(200, status1_after);
