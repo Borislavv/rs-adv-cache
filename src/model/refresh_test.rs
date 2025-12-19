@@ -2,7 +2,6 @@
 mod tests {
     use crate::config;
     use crate::time;
-    use std::sync::atomic::Ordering;
     use std::sync::Arc;
     use std::time::Duration;
     use tokio::time::sleep;
@@ -16,7 +15,7 @@ mod tests {
     #[tokio::test]
     async fn test_should_be_refreshed_floor_guard() {
         init_test();
-        
+
         let rule = Arc::new(config::Rule {
             path: None,
             path_bytes: None,
@@ -37,18 +36,17 @@ mod tests {
                 coefficient: Some(0.5),
             }),
         });
-        
-        let mut e = crate::model::Entry::init();
-        e.rule = rule.clone();
+
+        let e = crate::model::Entry::init().with_rule(rule.clone());
 
         let cfg = config::new_test_config();
 
-        e.updated_at.store(time::unix_nano(), Ordering::Relaxed);
+        e.set_refreshed_at_for_tests(time::unix_nano());
         // Sleep slightly less than minStale to account for timing precision
         // minStale = 0.5 * 1s = 500ms, so sleep 450ms to ensure we're well below the floor
         // This accounts for ctime resolution (1ms) and potential sleep inaccuracy
         sleep(Duration::from_millis(450)).await;
-        
+
         // Verify that elapsed time is still below minStale threshold
         // This should guarantee that is_probably_expired returns false
         if e.is_probably_expired(&cfg) {
@@ -74,7 +72,7 @@ mod tests {
     #[tokio::test]
     async fn test_should_be_refreshed_high_probability() {
         init_test();
-        
+
         let rule = Arc::new(config::Rule {
             path: None,
             path_bytes: None,
@@ -95,13 +93,12 @@ mod tests {
                 coefficient: Some(0.0),
             }),
         });
-        
-        let mut e = crate::model::Entry::init();
-        e.rule = rule.clone();
-        
+
+        let e = crate::model::Entry::init().with_rule(rule.clone());
+
         // Set updated_at to 2 seconds ago
         let two_seconds_ago = time::unix_nano() - Duration::from_secs(2).as_nanos() as i64;
-        e.updated_at.store(two_seconds_ago, Ordering::Relaxed);
+        e.set_refreshed_at_for_tests(two_seconds_ago);
 
         let cfg = config::new_test_config();
 
@@ -117,4 +114,3 @@ mod tests {
         }
     }
 }
-

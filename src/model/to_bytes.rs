@@ -1,9 +1,12 @@
-// Package model provides entry serialization to/from bytes.
+//! Entry serialization to/from bytes.
+//
 
-use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
-use std::io::{Read, Write};
+use byteorder::{LittleEndian, ReadBytesExt};
+use std::io::Read;
+
 use crate::config::Config;
-use super::{Entry, match_cache_rule};
+
+use super::{match_cache_rule, Entry};
 
 impl Entry {
     /// Encodes Entry into a compact little-endian binary format.
@@ -20,7 +23,7 @@ impl Entry {
     /// - []byte  payload
     ///
     pub fn to_bytes(&self) -> Vec<u8> {
-        let rule_path = self.rule.path_bytes.as_deref().unwrap_or(&[]);
+        let rule_path = self.0.rule.path_bytes.as_deref().unwrap_or(&[]);
         let payload = self.payload_bytes();
 
         // Pre-calculate size
@@ -34,27 +37,27 @@ impl Entry {
 
         let mut buf = Vec::with_capacity(total);
 
-        // rulePath
-        buf.write_u32::<LittleEndian>(rule_path.len() as u32).unwrap();
-        buf.write_all(rule_path).unwrap();
+        // rulePath - write u32 as little-endian bytes
+        buf.extend_from_slice(&(rule_path.len() as u32).to_le_bytes());
+        buf.extend_from_slice(rule_path);
 
         // key
-        buf.write_u64::<LittleEndian>(self.key).unwrap();
+        buf.extend_from_slice(&self.0.key.to_le_bytes());
 
         // fingerprint HI
-        buf.write_u64::<LittleEndian>(self.fingerprint_hi).unwrap();
+        buf.extend_from_slice(&self.0.fingerprint_hi.to_le_bytes());
 
         // fingerprint LO
-        buf.write_u64::<LittleEndian>(self.fingerprint_lo).unwrap();
+        buf.extend_from_slice(&self.0.fingerprint_lo.to_le_bytes());
 
         // updatedAt
-        let updated_at = self.updated_at.load(std::sync::atomic::Ordering::Relaxed);
-        buf.write_u64::<LittleEndian>(updated_at as u64).unwrap();
+        let updated_at = self.0.updated_at.load(std::sync::atomic::Ordering::Relaxed);
+        buf.extend_from_slice(&(updated_at as u64).to_le_bytes());
 
         // payload
-        buf.write_u32::<LittleEndian>(payload.len() as u32).unwrap();
+        buf.extend_from_slice(&(payload.len() as u32).to_le_bytes());
         if !payload.is_empty() {
-            buf.write_all(&payload).unwrap();
+            buf.extend_from_slice(&payload);
         }
 
         buf
@@ -62,9 +65,11 @@ impl Entry {
 }
 
 /// Decodes Entry from the wire format described in ToBytes.
-pub fn from_bytes(data: &[u8], cfg: &Config) -> Result<Entry, Box<dyn std::error::Error + Send + Sync>> {
+pub fn from_bytes(
+    data: &[u8],
+    cfg: &Config,
+) -> Result<Entry, Box<dyn std::error::Error + Send + Sync>> {
     use std::io::Cursor;
-    use std::sync::Arc;
 
     const U32: usize = 4;
     const U64: usize = 8;
@@ -128,8 +133,7 @@ pub fn from_bytes(data: &[u8], cfg: &Config) -> Result<Entry, Box<dyn std::error
         f_hi,
         f_lo,
         payload,
-        Arc::new(rule.clone()),
+        rule.clone(), // Already Arc<Rule>, just clone the Arc
         updated_at,
     ))
 }
-

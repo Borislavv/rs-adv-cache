@@ -1,8 +1,9 @@
-// Package model provides payload decoding functionality.
+//! Payload decoding functionality.
 
 use byteorder::{ByteOrder, LittleEndian};
+
 use super::payload_encoder::*;
-use super::{Entry, RequestPayload, ResponsePayload};
+use super::{Entry, Payload, RequestPayload, ResponsePayload};
 
 /// Error types for payload decoding.
 #[derive(Debug, thiserror::Error)]
@@ -22,17 +23,28 @@ pub enum PayloadError {
 }
 
 impl Entry {
-    /// Gets the request payload (queries, headers).
+    /// Gets the full payload (queries, request headers, response headers, body, code).
+    pub fn payload(&self) -> Result<Payload, PayloadError> {
+        let req_payload = self.request_payload()?;
+        let resp_payload = self.response_payload()?;
+
+        Ok(Payload {
+            queries: req_payload.queries,
+            req_headers: req_payload.headers,
+            rsp_headers: resp_payload.headers,
+            body: resp_payload.body,
+            code: resp_payload.code,
+        })
+    }
+
+    /// Gets the request payload (queries and headers).
     pub fn request_payload(&self) -> Result<RequestPayload, PayloadError> {
         let data = self.get_payload_data()?;
 
         let queries = self.unpack_queries(&data)?;
         let headers = self.unpack_request_headers(&data)?;
 
-        Ok(RequestPayload {
-            queries,
-            headers,
-        })
+        Ok(RequestPayload { queries, headers })
     }
 
     /// Gets the response payload (headers, body, code).
@@ -53,7 +65,8 @@ impl Entry {
     /// Unpacks queries from the payload.
     fn unpack_queries(&self, data: &[u8]) -> Result<Vec<(Vec<u8>, Vec<u8>)>, PayloadError> {
         let offset_from = LittleEndian::read_u32(&data[OFF_QUERY..OFF_QUERY + OFF_WEIGHT]) as usize;
-        let offset_to = LittleEndian::read_u32(&data[OFF_REQ_HDRS..OFF_REQ_HDRS + OFF_WEIGHT]) as usize;
+        let offset_to =
+            LittleEndian::read_u32(&data[OFF_REQ_HDRS..OFF_REQ_HDRS + OFF_WEIGHT]) as usize;
 
         let mut queries = Vec::new();
         let mut pos = offset_from;
@@ -87,7 +100,8 @@ impl Entry {
 
     /// Unpacks request headers from the payload.
     fn unpack_request_headers(&self, data: &[u8]) -> Result<Vec<(Vec<u8>, Vec<u8>)>, PayloadError> {
-        let offset_from = LittleEndian::read_u32(&data[OFF_REQ_HDRS..OFF_REQ_HDRS + OFF_WEIGHT]) as usize;
+        let offset_from =
+            LittleEndian::read_u32(&data[OFF_REQ_HDRS..OFF_REQ_HDRS + OFF_WEIGHT]) as usize;
         let offset_to = LittleEndian::read_u32(&data[OFF_STATUS..OFF_STATUS + OFF_WEIGHT]) as usize;
 
         let mut headers = Vec::new();
@@ -122,7 +136,8 @@ impl Entry {
 
     /// Unpacks status code from the payload.
     fn unpack_status_code(&self, data: &[u8]) -> Result<u16, PayloadError> {
-        let offset_from = LittleEndian::read_u32(&data[OFF_STATUS..OFF_STATUS + OFF_WEIGHT]) as usize;
+        let offset_from =
+            LittleEndian::read_u32(&data[OFF_STATUS..OFF_STATUS + OFF_WEIGHT]) as usize;
         let offset_to = offset_from + OFF_WEIGHT;
 
         if offset_to > data.len() {
@@ -134,8 +149,12 @@ impl Entry {
     }
 
     /// Unpacks response headers from the payload.
-    fn unpack_response_headers(&self, data: &[u8]) -> Result<Vec<(Vec<u8>, Vec<u8>)>, PayloadError> {
-        let offset_from = LittleEndian::read_u32(&data[OFF_RESP_HDRS..OFF_RESP_HDRS + OFF_WEIGHT]) as usize;
+    fn unpack_response_headers(
+        &self,
+        data: &[u8],
+    ) -> Result<Vec<(Vec<u8>, Vec<u8>)>, PayloadError> {
+        let offset_from =
+            LittleEndian::read_u32(&data[OFF_RESP_HDRS..OFF_RESP_HDRS + OFF_WEIGHT]) as usize;
         let offset_to = LittleEndian::read_u32(&data[OFF_BODY..OFF_BODY + OFF_WEIGHT]) as usize;
 
         let mut headers = Vec::new();
@@ -176,7 +195,8 @@ impl Entry {
             return Err(PayloadError::CorruptedResponseBodySection);
         }
 
-        let body_len = LittleEndian::read_u32(&data[body_offset..body_offset + OFF_WEIGHT]) as usize;
+        let body_len =
+            LittleEndian::read_u32(&data[body_offset..body_offset + OFF_WEIGHT]) as usize;
         let offset_from = body_offset + OFF_WEIGHT;
         let offset_to = offset_from + body_len;
 
@@ -187,18 +207,24 @@ impl Entry {
         Ok(data[offset_from..offset_to].to_vec())
     }
 
-    /// Gets the payload data, checking for validity.
+    /// Gets the payload data, checking for validity (returns Vec<u8> copy).
     fn get_payload_data(&self) -> Result<Vec<u8>, PayloadError> {
-        let payload_guard = self.payload.lock().unwrap();
-        match payload_guard.as_ref() {
-            Some(data) => {
-                if data.len() < OFFSETS_MAP_SIZE {
-                    return Err(PayloadError::MalformedOrNilPayload);
-                }
-                Ok(data.clone())
-            }
-            None => Err(PayloadError::MalformedOrNilPayload),
+        let payload_guard = self.0.payload.load();
+        let arc_vec = match payload_guard.as_ref() {
+            Some(arc_vec) => arc_vec,
+            None => return Err(PayloadError::MalformedOrNilPayload),
+        };
+        
+        let data = &**arc_vec;
+        if data.is_empty() {
+            return Err(PayloadError::MalformedOrNilPayload);
         }
+        
+        if data.len() < OFFSETS_MAP_SIZE {
+            return Err(PayloadError::MalformedOrNilPayload);
+        }
+        
+        // Clone Vec<u8> (copy, but simple and guaranteed single source)
+        Ok(data.clone())
     }
 }
-

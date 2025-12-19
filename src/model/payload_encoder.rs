@@ -1,6 +1,9 @@
-// Package model provides payload encoding functionality.
+//! Payload encoding functionality.
+//
 
-use byteorder::{ByteOrder, LittleEndian, WriteBytesExt};
+use std::sync::Arc;
+use byteorder::{ByteOrder, LittleEndian};
+
 use super::{Entry, Response};
 
 /// Payload offset constants.
@@ -15,12 +18,13 @@ pub const OFF_WEIGHT: usize = 4;
 impl Entry {
     /// Sets the payload from queries, headers, and response.
     pub fn set_payload(
-        &mut self,
+        &self,
         queries: &[(Vec<u8>, Vec<u8>)],
         headers: &[(Vec<u8>, Vec<u8>)],
         resp: &Response,
     ) {
         let (length, _capacity) = self.calc_payload_length(queries, headers, resp);
+        // Create Vec<u8> with exact capacity - simple, no overhead
         let mut buf = Vec::with_capacity(length);
 
         // Reserve space for offsets map
@@ -34,20 +38,24 @@ impl Entry {
         let body_offset = self.pack_body(&mut buf, &resp.body);
 
         // Write offsets back to header
-        let mut cursor = std::io::Cursor::new(&mut buf);
-        cursor.set_position(OFF_QUERY as u64);
-        cursor.write_u32::<LittleEndian>(queries_offset as u32).unwrap();
-        cursor.set_position(OFF_REQ_HDRS as u64);
-        cursor.write_u32::<LittleEndian>(req_hdrs_offset as u32).unwrap();
-        cursor.set_position(OFF_STATUS as u64);
-        cursor.write_u32::<LittleEndian>(status_offset as u32).unwrap();
-        cursor.set_position(OFF_RESP_HDRS as u64);
-        cursor.write_u32::<LittleEndian>(resp_hdrs_offset as u32).unwrap();
-        cursor.set_position(OFF_BODY as u64);
-        cursor.write_u32::<LittleEndian>(body_offset as u32).unwrap();
+        let queries_offset_bytes = (queries_offset as u32).to_le_bytes();
+        buf[OFF_QUERY..OFF_QUERY + OFF_WEIGHT].copy_from_slice(&queries_offset_bytes);
+        
+        let req_hdrs_offset_bytes = (req_hdrs_offset as u32).to_le_bytes();
+        buf[OFF_REQ_HDRS..OFF_REQ_HDRS + OFF_WEIGHT].copy_from_slice(&req_hdrs_offset_bytes);
+        
+        let status_offset_bytes = (status_offset as u32).to_le_bytes();
+        buf[OFF_STATUS..OFF_STATUS + OFF_WEIGHT].copy_from_slice(&status_offset_bytes);
+        
+        let resp_hdrs_offset_bytes = (resp_hdrs_offset as u32).to_le_bytes();
+        buf[OFF_RESP_HDRS..OFF_RESP_HDRS + OFF_WEIGHT].copy_from_slice(&resp_hdrs_offset_bytes);
+        
+        let body_offset_bytes = (body_offset as u32).to_le_bytes();
+        buf[OFF_BODY..OFF_BODY + OFF_WEIGHT].copy_from_slice(&body_offset_bytes);
 
-        // Store payload
-        *self.payload.lock().unwrap() = Some(buf);
+        buf.shrink_to_fit();
+        
+        self.0.payload.store(Some(Arc::new(buf)));
     }
 
     /// Packs queries into the buffer.
@@ -138,4 +146,3 @@ fn append_u32(dst: &mut Vec<u8>, v: u32) {
     LittleEndian::write_u32(&mut bytes, v);
     dst.extend_from_slice(&bytes);
 }
-
