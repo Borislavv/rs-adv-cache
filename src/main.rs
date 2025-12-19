@@ -1,31 +1,32 @@
 // Main entrypoint for the AdvCache application.
-mod config;
+
+mod app;
 #[path = "shared/bytes/mod.rs"]
 mod bytes;
-#[path = "shared/time/mod.rs"]
-mod time;
+mod config;
+mod controller;
 #[path = "shared/dedlog/mod.rs"]
 mod dedlog;
+mod governor;
+mod http;
+#[path = "k8s/probe/liveness/mod.rs"]
+mod liveness;
+mod metrics;
+mod middleware;
+mod model;
 #[path = "shared/rand/mod.rs"]
 mod rand;
 #[path = "shared/rate/mod.rs"]
 mod rate;
+mod shutdown;
 #[path = "shared/sort/mod.rs"]
 mod sort;
-mod shutdown;
-#[path = "k8s/probe/liveness/mod.rs"]
-mod liveness;
-mod governor;
-mod http;
-mod upstream;
-mod storage;
-mod model;
-mod workers;
-mod controller;
+mod db;
+#[path = "shared/time/mod.rs"]
+mod time;
 mod traces;
-mod metrics;
-mod app;
-mod middleware;
+mod upstream;
+mod workers;
 
 use crate::config::{Config, ConfigTrait};
 use crate::shutdown::GracefulShutdown;
@@ -119,13 +120,13 @@ fn configure_logger(cfg: &Config) {
     use tracing_subscriber::prelude::*;
     use tracing_subscriber::EnvFilter;
 
-    let log_level = cfg.logs()
+    let log_level = cfg
+        .logs()
         .and_then(|logs| logs.level.as_ref())
         .map(|s| s.as_str())
         .unwrap_or("debug");
 
-    let filter = EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| EnvFilter::new(log_level));
+    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(log_level));
 
     if cfg.is_prod() {
         // Production: JSON format
@@ -137,10 +138,7 @@ fn configure_logger(cfg: &Config) {
         // Development: Pretty console format
         tracing_subscriber::registry()
             .with(filter)
-            .with(
-                fmt::layer()
-                    .pretty()
-            )
+            .with(fmt::layer().pretty())
             .init();
     }
 }
@@ -173,20 +171,23 @@ async fn main() -> Result<()> {
 
     // Setup graceful shutdown handler
     let graceful_shutdown = GracefulShutdown::new(shutdown_token.clone());
-    graceful_shutdown.set_graceful_timeout(Duration::from_secs(60)).await;
+    graceful_shutdown
+        .set_graceful_timeout(Duration::from_secs(60))
+        .await;
 
     // Initialize liveness probe for Kubernetes/Cloud health checks
-    let probe_timeout = cfg.k8s()
+    let probe_timeout = cfg
+        .k8s()
         .and_then(|k8s| k8s.probe.timeout)
         .unwrap_or(Duration::from_secs(5));
-    let probe = liveness::Probe::new(probe_timeout);
+    let probe = Arc::new(liveness::Probe::new(probe_timeout)) as Arc<dyn liveness::Prober>;
 
     // Initialize and start the cache application
     let app = app::App::new(shutdown_token.clone(), cfg, probe).await?;
 
     // Register app for graceful shutdown
     graceful_shutdown.add(1);
-    
+
     // Start the app in a background task
     let app_clone = app.clone();
     let graceful_done = Arc::new(graceful_shutdown.clone());
