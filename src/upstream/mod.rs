@@ -1,8 +1,8 @@
 //! Upstream backend functionality for proxying requests to origin servers.
 
 pub mod backend;
-mod backend_headers;
-mod backend_hyper_impl;
+pub mod backend_headers;
+pub mod backend_hyper_impl;
 pub mod probe;
 pub mod proxy;
 pub mod sanitize;

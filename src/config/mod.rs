@@ -577,5 +577,3 @@ impl Config {
 
 // Test config is always available for integration tests
 mod test_config;
-#[allow(dead_code)]
-pub use test_config::new_test_config;
