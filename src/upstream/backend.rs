@@ -344,6 +344,7 @@ impl Upstream for BackendImpl {
                 use crate::upstream::backend_headers::process_response_headers;
                 let response_headers = process_response_headers(&response_headers_map, None);
                 
+                let body_bytes: Vec<u8> = body_bytes;
                 let response_size: usize = body_bytes.len();
                 
                 // Record response in span
