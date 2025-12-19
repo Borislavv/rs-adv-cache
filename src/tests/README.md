@@ -1,4 +1,4 @@
-# E2E Tests: Advanced Cache / Proxy
+# E2E Tests
 
 ## How to run
 ```bash

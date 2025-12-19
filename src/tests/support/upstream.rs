@@ -1,8 +1,5 @@
 // Test upstream server for integration tests.
 
-use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
-use std::time::Duration;
 use axum::{
     extract::Request,
     http::{HeaderMap, StatusCode},
@@ -13,6 +10,9 @@ use axum::{
 use flate2::write::GzEncoder;
 use flate2::Compression;
 use serde_json::json;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
 use tokio::net::TcpListener;
 use tokio::task::JoinHandle;
 
@@ -34,21 +34,21 @@ fn normalize_allowed_query(raw: &str) -> String {
             acc.entry(k).or_insert_with(Vec::new).push(v);
             acc
         });
-    
+
     let mut allowed: Vec<_> = parsed
         .iter()
         .filter(|(k, _)| ALLOWED_QUERY_KEYS.contains(&k.as_str()))
         .collect();
-    
+
     allowed.sort_by_key(|(k, _)| *k);
-    
-    let mut query_parts = Vec::new();
+
+    let mut serializer = url::form_urlencoded::Serializer::new(String::new());
     for (k, values) in allowed {
         for v in values {
-            query_parts.push(format!("{}={}", urlencoding::encode(k), urlencoding::encode(v)));
+            serializer.append_pair(k, v);
         }
     }
-    query_parts.join("&")
+    serializer.finish()
 }
 
 /// Computes the counter key from request.
@@ -72,7 +72,7 @@ fn derive_num_from_query(raw: &str) -> i32 {
             acc.entry(k).or_insert_with(Vec::new).push(v);
             acc
         });
-    
+
     if let Some(user_id) = parsed.get("user[id]").and_then(|v| v.first()) {
         let mut sum = 0;
         for ch in user_id.chars() {
@@ -84,7 +84,7 @@ fn derive_num_from_query(raw: &str) -> i32 {
             return sum;
         }
     }
-    
+
     // Fallback: hash of normalized string
     let mut h = 0;
     for &byte in norm.as_bytes() {
@@ -107,16 +107,16 @@ impl UpstreamCounters {
             hits: Arc::new(Mutex::new(HashMap::new())),
         }
     }
-    
+
     fn inc(&self, key: String) {
         let mut hits = self.hits.lock().unwrap();
         *hits.entry(key).or_insert(0) += 1;
     }
-    
+
     pub fn snapshot(&self) -> HashMap<String, i64> {
         self.hits.lock().unwrap().clone()
     }
-    
+
     pub fn get(&self, key: &str) -> i64 {
         *self.hits.lock().unwrap().get(key).unwrap_or(&0)
     }
@@ -143,7 +143,7 @@ impl UpstreamServer {
     pub async fn start() -> Self {
         let counter = UpstreamCounters::new();
         let counter_for_handler = counter.clone();
-        
+
         let handler = move |req: Request| {
             let counter = counter_for_handler.clone();
             async move {
@@ -155,10 +155,37 @@ impl UpstreamServer {
                     .and_then(|v| v.to_str().ok())
                     .unwrap_or("")
                     .to_string();
-                
+
                 let (ctr_key, ae_raw, ae) = compute_key(&path, query, &accept_encoding);
                 counter.inc(ctr_key.clone());
-                
+
+                // Extract Host header for verification (proxy_forwarded_host test)
+                let host_header = req
+                    .headers()
+                    .get("host")
+                    .and_then(|v| v.to_str().ok())
+                    .map(|s| s.to_string())
+                    .unwrap_or_default();
+
+                // Check for hop-by-hop headers (should not be present)
+                let hop_by_hop_headers = [
+                    "connection",
+                    "proxy-connection",
+                    "keep-alive",
+                    "proxy-authenticate",
+                    "proxy-authorization",
+                    "te",
+                    "trailer",
+                    "transfer-encoding",
+                    "upgrade",
+                ];
+                let mut received_hop_by_hop = Vec::new();
+                for h in &hop_by_hop_headers {
+                    if req.headers().contains_key(*h) {
+                        received_hop_by_hop.push(h.to_string());
+                    }
+                }
+
                 let n = derive_num_from_query(query);
                 let payload = json!({
                     "title": format!("{} title", n),
@@ -166,18 +193,20 @@ impl UpstreamServer {
                     "echo": {
                         "path": path,
                         "query": normalize_allowed_query(query),
-                        "ae": ae
+                        "ae": ae,
+                        "host": host_header,
+                        "hop_by_hop_received": received_hop_by_hop
                     }
                 });
-                
+
                 let body = serde_json::to_vec(&payload).unwrap();
-                
+
                 let mut headers = HeaderMap::new();
                 headers.insert("content-type", "application/json".parse().unwrap());
                 headers.insert("x-up-key", ctr_key.parse().unwrap());
                 headers.insert("x-up-ae", ae.parse().unwrap());
                 headers.insert("x-up-ae-raw", ae_raw.parse().unwrap());
-                
+
                 if ae == "gzip" {
                     headers.insert("content-encoding", "gzip".parse().unwrap());
                     let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
@@ -190,20 +219,20 @@ impl UpstreamServer {
                 }
             }
         };
-        
+
         let router = Router::new()
-            .route("/healthcheck", get(|| async { "ok" }))
+            .route("/healthz", get(|| async { "ok" }))
             .route("/api/v1/user", axum::routing::any(handler.clone()))
             .route("/api/v1/client", axum::routing::any(handler.clone()))
             .route("/api/v1/buyer", axum::routing::any(handler.clone()))
             .route("/api/v1/customer", axum::routing::any(handler));
-        
+
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
         let addr_str = format!("127.0.0.1:{}", addr.port());
-        
+
         let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
-        
+
         let handle = tokio::spawn(async move {
             let server = axum::serve(listener, router);
             tokio::select! {
@@ -211,10 +240,10 @@ impl UpstreamServer {
                 _ = shutdown_rx => {},
             }
         });
-        
+
         // Wait for server to be ready
-        wait_http_ready(&format!("http://{}/healthcheck", addr_str)).await;
-        
+        wait_http_ready(&format!("http://{}/healthz", addr_str)).await;
+
         Self {
             addr: addr_str,
             counter,
@@ -222,15 +251,15 @@ impl UpstreamServer {
             shutdown: shutdown_tx,
         }
     }
-    
+
     pub fn addr(&self) -> &str {
         &self.addr
     }
-    
+
     pub fn counter(&self) -> &UpstreamCounters {
         &self.counter
     }
-    
+
     /// Closes the upstream server.
     pub async fn close(self) {
         let _ = self.shutdown.send(());
@@ -251,4 +280,3 @@ async fn wait_http_ready(url: &str) {
     }
     panic!("http not ready: {}", url);
 }
-

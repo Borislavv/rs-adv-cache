@@ -7,8 +7,8 @@ pub type H = HashMap<String, String>;
 
 /// Creates a new namespace for test isolation.
 pub fn new_namespace(test_name: &str) -> String {
-    use sha1::{Sha1, Digest};
     use hex;
+    use sha1::{Digest, Sha1};
     let mut hasher = Sha1::new();
     hasher.update(test_name.as_bytes());
     let hash = hasher.finalize();
@@ -37,7 +37,7 @@ pub async fn do_request(
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(10))
         .build()?;
-    
+
     let mut request = match method {
         "GET" => client.get(url),
         "POST" => client.post(url),
@@ -45,15 +45,15 @@ pub async fn do_request(
         "DELETE" => client.delete(url),
         _ => panic!("unsupported method: {}", method),
     };
-    
+
     for (k, v) in headers {
         request = request.header(k, v);
     }
-    
+
     if let Some(body_data) = body {
         request = request.body(body_data.to_vec());
     }
-    
+
     request.send().await
 }
 
@@ -62,21 +62,29 @@ pub async fn do_json<T: serde::de::DeserializeOwned>(
     method: &str,
     url: &str,
     headers: &H,
-) -> Result<(u16, std::collections::HashMap<String, String>, Vec<u8>, Option<T>), reqwest::Error> {
+) -> Result<
+    (
+        u16,
+        HashMap<String, String>,
+        Vec<u8>,
+        Option<T>,
+    ),
+    reqwest::Error,
+> {
     let resp = do_request(method, url, headers, None).await?;
     let status = resp.status().as_u16();
-    
+
     // Convert headers to HashMap
-    let mut header_map = std::collections::HashMap::new();
+    let mut header_map = HashMap::new();
     for (k, v) in resp.headers() {
         let k_str: String = k.as_str().to_string();
         if let Ok(v_str) = v.to_str() {
             header_map.insert(k_str, v_str.to_string());
         }
     }
-    
+
     let body = resp.bytes().await?.to_vec();
-    
+
     let parsed: Option<T> = if header_map
         .get("content-type")
         .map(|s| s.contains("json"))
@@ -87,7 +95,7 @@ pub async fn do_json<T: serde::de::DeserializeOwned>(
     } else {
         None
     };
-    
+
     Ok((status, header_map, body, parsed))
 }
 
@@ -107,8 +115,8 @@ pub fn assert_equal<T: PartialEq + std::fmt::Debug>(want: T, got: T) {
 
 /// Computes SHA1 hash of bytes for test comparisons.
 pub fn phash(b: &[u8]) -> String {
-    use sha1::{Sha1, Digest};
     use hex;
+    use sha1::{Digest, Sha1};
     let mut hasher = Sha1::new();
     hasher.update(b);
     hex::encode(hasher.finalize())
@@ -118,4 +126,3 @@ pub fn phash(b: &[u8]) -> String {
 pub fn hash(b: &[u8]) -> String {
     phash(b)
 }
-
