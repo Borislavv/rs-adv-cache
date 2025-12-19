@@ -1,11 +1,6 @@
-// Package api provides config display controller.
+//! Config display controller.
 
-use axum::{
-    http::StatusCode,
-    response::IntoResponse,
-    routing::get,
-    Router,
-};
+use axum::{http::StatusCode, response::IntoResponse, routing::get, Router};
 use std::sync::Arc;
 
 use crate::config::Config;
@@ -19,16 +14,14 @@ pub struct ShowConfigController {
 impl ShowConfigController {
     /// Creates a new show config controller.
     pub fn new(cfg: Config) -> Self {
-        Self {
-            cfg: Arc::new(cfg),
-        }
+        Self { cfg: Arc::new(cfg) }
     }
 
     /// Handles the show config request.
     async fn show_config(cfg: Arc<Config>) -> impl IntoResponse {
         let json = serde_json::to_string(&*cfg)
             .unwrap_or_else(|_| r#"{"error": "failed to serialize config"}"#.to_string());
-        
+
         (
             StatusCode::OK,
             [("content-type", "application/json; charset=utf-8")],
@@ -40,11 +33,12 @@ impl ShowConfigController {
 impl Controller for ShowConfigController {
     fn add_route(&self, router: Router) -> Router {
         let cfg = self.cfg.clone();
-        router
-            .route("/advcache/config", get(move || {
+        router.route(
+            "/advcache/config",
+            get(move || {
                 let cfg = cfg.clone();
                 async move { Self::show_config(cfg).await }
-            }))
+            }),
+        )
     }
 }
-

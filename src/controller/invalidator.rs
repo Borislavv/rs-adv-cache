@@ -1,4 +1,4 @@
-// Package api provides cache invalidation controller.
+//! Cache invalidation controller.
 
 use axum::{
     extract::{Query, State},
@@ -9,15 +9,15 @@ use axum::{
 };
 use serde::Serialize;
 use std::collections::HashMap;
-use std::sync::Arc;
 use std::sync::atomic::Ordering;
+use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
 
 use crate::config::Config;
-use crate::http::Controller;
 use crate::http::query::filter_and_sort_request;
+use crate::http::Controller;
 use crate::model::match_cache_rule;
-use crate::storage::Storage;
+use crate::db::Storage;
 
 const PATH_SPECIAL: &str = "_path";
 const REMOVE_SPECIAL: &str = "_remove";
@@ -38,7 +38,10 @@ pub struct InvalidateController {
 impl InvalidateController {
     /// Creates a new mark outdated controller.
     pub fn new(cfg: Config, db: Arc<dyn Storage>) -> Self {
-        Self { db, cfg: Arc::new(cfg) }
+        Self {
+            db,
+            cfg: Arc::new(cfg),
+        }
     }
 
     /// Invalidates cache entries based on query parameters and path.
@@ -65,7 +68,7 @@ impl InvalidateController {
         // Find cache rule for the path
         let path_bytes = path_str.as_bytes();
         let rule = match match_cache_rule(&controller.cfg, path_bytes) {
-            Ok(r) => Arc::new(r.clone()),
+            Ok(r) => r, // Already Arc<Rule>, just clone the Arc
             Err(_) => {
                 let resp = MarkedResponse {
                     success: false,
@@ -79,20 +82,15 @@ impl InvalidateController {
             }
         };
 
-        // Build query string from remaining parameters (excluding _path)
-        let mut query_parts = Vec::new();
+        use url::form_urlencoded;
+        let mut serializer = form_urlencoded::Serializer::new(String::new());
         for (key, value) in &params {
             if key != PATH_SPECIAL && key != REMOVE_SPECIAL {
-                query_parts.push(format!("{}={}", key, urlencoding::encode(value)));
+                serializer.append_pair(key, value);
             }
         }
-        let query_str = if query_parts.is_empty() {
-            String::new()
-        } else {
-            query_parts.join("&")
-        };
+        let query_str = serializer.finish();
 
-        // Filter and sort query parameters according to rule
         let filtered_queries = filter_and_sort_request(Some(&*rule), &query_str);
 
         // Determine if we should remove entries (check for _remove query param)
@@ -119,40 +117,40 @@ impl InvalidateController {
 
             shard.walk_r(&ctx, |key, entry| {
                 // Check if path matches
-                let entry_path = entry.rule.path_bytes.as_deref().unwrap_or(&[]);
+                let entry_path = entry.rule().path_bytes.as_deref().unwrap_or(&[]);
                 if entry_path != path_bytes {
                     return true; // Continue to next entry
                 }
 
                 // Check if rule path matches
-                if entry.rule.path.as_deref() != rule.path.as_deref() {
+                if entry.rule().path.as_deref() != rule.path.as_deref() {
                     return true; // Continue to next entry
                 }
 
-                // Unpack queries from entry payload
-                let entry_queries = match entry.request_payload() {
-                    Ok(payload) => payload.queries,
-                    Err(_) => {
-                        // If we can't unpack, skip this entry
-                        return true;
-                    }
-                };
-
-                // Check if queries match
+                // Check if queries match using walk_query
                 // If no filtered queries provided, match all entries for the path
-                // Otherwise, all filtered queries must be present in entry with exact values
                 let matches = if filtered_queries.is_empty() {
                     true // No query filter - match all entries for this path
                 } else {
                     // All filtered queries must be present in entry with exact match
+                    // Use walk_query to iterate over queries directly from encoded payload
                     let mut all_match = true;
                     for (filter_key, filter_value) in &filtered_queries {
                         let mut found = false;
-                        for (entry_key, entry_value) in &entry_queries {
-                            if entry_key == filter_key && entry_value == filter_value {
+                        if let Err(e) = entry.walk_query(|entry_key, entry_value| {
+                            // Use is_bytes_are_equals for comparison
+                            if crate::bytes::is_bytes_are_equals(filter_key, entry_key)
+                                && crate::bytes::is_bytes_are_equals(filter_value, entry_value) {
                                 found = true;
-                                break;
+                                false // Stop iteration
+                            } else {
+                                true // Continue iteration
                             }
+                        }) {
+                            // Error walking queries - probably malformed payload
+                            tracing::error!(error = %e, "failed to mark/remove entries (probably malformed payload)");
+                            all_match = false;
+                            break;
                         }
                         if !found {
                             all_match = false;
@@ -172,10 +170,8 @@ impl InvalidateController {
                     keys_to_remove.lock().unwrap().push(key);
                     affected.fetch_add(1, Ordering::Relaxed);
                 } else {
-                    // Mark as outdated (set updated_at to past)
-                    // Note: untouch_refreshed_at requires mutable access, but we have immutable
-                    // We need to get the entry mutably or use a different approach
-                    // For now, we'll collect keys and handle them separately
+                    // Mark entry as outdated for background refresh
+                    // Collect key to handle after walk completes
                     keys_to_remove.lock().unwrap().push(key);
                     affected.fetch_add(1, Ordering::Relaxed);
                 }
@@ -192,25 +188,19 @@ impl InvalidateController {
                     // Remove entry
                     controller.db.remove(&entry);
                 } else {
-                    // Mark as outdated - set updated_at to past (making entry expired)
-                    // This is equivalent to untouch_refreshed_at()
-                    let ttl_nanos = entry.rule.refresh.as_ref()
-                        .and_then(|r| r.ttl)
-                        .map(|d| d.as_nanos() as i64)
-                        .unwrap_or(0);
-                    let now = crate::time::unix_nano();
-                    entry.updated_at.store(now - ttl_nanos, Ordering::Relaxed);
+                    // Mark entry as outdated for background refresh
+                    entry.untouch_refreshed_at();
                 }
             }
         }
 
         let affected_count = affected.load(Ordering::Relaxed);
-        
+
         let resp = MarkedResponse {
             success: true,
             affected: affected_count,
         };
-        
+
         tracing::info!(
             component = "invalidate",
             path = %path_str,
@@ -218,7 +208,7 @@ impl InvalidateController {
             removed = should_remove,
             "cache entries marked as outdated"
         );
-        
+
         (
             StatusCode::OK,
             [("content-type", "application/json")],
@@ -230,13 +220,13 @@ impl InvalidateController {
 impl Controller for InvalidateController {
     fn add_route(&self, router: Router) -> Router {
         let controller = Arc::new(self.clone());
-        router
-            .route("/advcache/invalidate", get(move |query: Query<HashMap<String, String>>| {
+        router.route(
+            "/advcache/invalidate",
+            get(move |query: Query<HashMap<String, String>>| {
                 let controller = controller.clone();
-                async move {
-                    Self::invalidate(query, State(controller)).await
-                }
-            }))
+                async move { Self::invalidate(query, State(controller)).await }
+            }),
+        )
     }
 }
 

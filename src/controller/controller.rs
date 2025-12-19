@@ -15,4 +15,3 @@ pub trait Controller: Send + Sync {
     /// ```
     fn add_route(&self, router: Router) -> Router;
 }
-

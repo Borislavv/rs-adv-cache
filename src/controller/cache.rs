@@ -4,47 +4,49 @@ use axum::{
     extract::State,
     http::{HeaderMap, HeaderValue, StatusCode},
     response::Response,
+    routing::get,
     Router,
 };
-use std::sync::Arc;
 use std::sync::atomic::{AtomicI64, Ordering};
-use std::time::{Instant, Duration};
-use tokio_util::sync::CancellationToken;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 use tokio::time::interval;
+use tokio_util::sync::CancellationToken;
 use tracing::{error, info};
 
 use crate::config::{Config, ConfigTrait};
-use crate::http::Controller;
-use crate::http::render::renderer;
-use crate::http::query::filter_and_sort_request as filter_and_sort_queries;
+use crate::dedlog;
 use crate::http::header::filter_and_sort_request as filter_and_sort_headers;
-use crate::storage::Storage;
-use crate::upstream::Upstream;
-use crate::model::{Entry, match_cache_rule, is_cache_rule_not_found_err, Response as ModelResponse};
-use crate::time;
+use crate::http::query::filter_and_sort_request as filter_and_sort_queries;
+use crate::http::render::renderer;
+use crate::http::Controller;
+use crate::http::{is_compression_enabled, panics_counter};
 use crate::metrics as prom_metrics;
 use crate::metrics::policy::Policy as LifetimePolicy;
+use crate::model::{
+    is_cache_rule_not_found_err, match_cache_rule, Response as ModelResponse,
+};
+use crate::db::Storage;
+use crate::time;
 use crate::traces;
-use crate::http::{is_compression_enabled, panics_counter};
 use crate::upstream::actual_policy;
-use crate::safe;
+use crate::upstream::Upstream;
 
 // Error constants
-// Removed unused constant ERR_MSG_ATTEMPT_TO_WRITE_503
 const ERR_MSG_INTERNAL_ERROR: &str = "internal error";
 const ERR_MSG_UPSTREAM_INTERNAL_ERROR: &str = "upstream internal error";
 const ERR_MSG_UPSTREAM_ERROR_WHILE_PROXYING: &str = "fetch upstream error while proxying";
-const ERR_MSG_UPSTREAM_ERROR_WHILE_CACHE_PROXYING: &str = "fetch upstream error while cache-proxying";
+const ERR_MSG_UPSTREAM_ERROR_WHILE_CACHE_PROXYING: &str =
+    "fetch upstream error while cache-proxying";
 const ERR_MSG_WRITE_ENTRY_TO_RESPONSE: &str = "write entry into response failed";
 
 // Error types
 #[derive(Debug, thiserror::Error)]
 pub enum CacheError {
+    // NeedRetryThroughProxy - is the marker error for the control the behavior 
+    // when we need to retry a request from proxy.
     #[error("need retry through proxy")]
     NeedRetryThroughProxy,
-    #[error("received an error status code")]
-    #[allow(dead_code)]
-    StatusCodeReceived,
     #[error(transparent)]
     Other(#[from] anyhow::Error),
 }
@@ -82,10 +84,10 @@ impl CacheProxyController {
             cache,
             upstream: backend,
         };
-        
+
         // Start metrics logger (runs every 5 seconds)
         controller.run_logger_metrics_writer();
-        
+
         controller
     }
 
@@ -96,35 +98,33 @@ impl CacheProxyController {
     ) -> Response {
         let start = Instant::now();
         TOTAL.fetch_add(1, Ordering::Relaxed);
-        
+
         // Extract request information
         let uri = request.uri();
         let path = uri.path();
         let path_bytes = path.as_bytes();
-        
+
         // Extract headers
+        // Note: HeaderName::to_string() returns lowercase, but we preserve original case via as_str()
         let mut request_headers = Vec::new();
         for (k, v) in request.headers() {
             if let Ok(v_str) = v.to_str() {
-                request_headers.push((k.to_string(), v_str.to_string()));
+                // Use as_str() to get the original header name (axum normalizes to lowercase)
+                // But for comparison, we use eq_ignore_ascii_case anyway
+                let header_name = k.as_str().to_string();
+                request_headers.push((header_name, v_str.to_string()));
             }
         }
-        
+
         // Extract query string
         let query_str = uri.query().unwrap_or("");
-        
+
         // Build request string representation for tracing
         let request_str = format!("{} {} {:?}", request.method(), uri, request.version());
-        
-        // Extract trace context from request headers and start tracing span if active
+
         let tracing_enabled = traces::is_active_tracing();
-        
-        // Extract trace context from headers if tracing is enabled
-        // Note: With tracing-opentelemetry, context is automatically propagated through async boundaries
-        // We don't need to explicitly attach the context here because tracing-opentelemetry
-        // handles context propagation automatically when using tracing::span!
+
         if tracing_enabled {
-            // Extract trace context from headers
             let trace_ctx = traces::extract(request.headers());
             // Attach context in synchronous block before any await
             // The guard will be dropped at end of block, but tracing-opentelemetry
@@ -132,7 +132,7 @@ impl CacheProxyController {
             let _ctx_guard = trace_ctx.attach();
             // Context is now active and will be propagated by tracing-opentelemetry
         }
-        
+
         // Create span using tracing API (integrates with OpenTelemetry via tracing-opentelemetry)
         // The span will automatically use the context that was attached above
         // We'll use the span directly for recording attributes without entering it
@@ -148,29 +148,62 @@ impl CacheProxyController {
         } else {
             None
         };
-        
-        // Handle request based on cache mode
-        // Trace context is automatically propagated through active span guard
+
+        #[derive(Copy, Clone)]
+        enum PathKind {
+            Cache,
+            Proxy,
+        }
+
+        let mut path_kind = PathKind::Cache;
+
+        // Handle request based on cache mode with fallback to proxy when needed.
         let result = if controller.cfg.is_enabled() {
-            // Cache mode
-            controller.handle_through_cache(path_bytes, query_str, &request_headers, request.method().as_str()).await
+            match controller
+                .handle_through_cache(
+                    path_bytes,
+                    query_str,
+                    &request_headers,
+                    request.method().as_str(),
+                    &request_str,
+                )
+                .await
+            {
+                Ok(ok) => Ok(ok),
+                Err(CacheError::NeedRetryThroughProxy) => {
+                    path_kind = PathKind::Proxy;
+                    PROXIED.fetch_add(1, Ordering::Relaxed);
+                    controller
+                        .handle_through_proxy(
+                            path,
+                            query_str,
+                            &request_headers,
+                            request.method().as_str(),
+                            &request_str,
+                        )
+                        .await
+                }
+                Err(err) => Err(err),
+            }
         } else {
-            // Proxy mode
+            path_kind = PathKind::Proxy;
             PROXIED.fetch_add(1, Ordering::Relaxed);
-            controller.handle_through_proxy(path, query_str, &request_headers, request.method().as_str()).await
+            controller
+                .handle_through_proxy(path, query_str, &request_headers, request.method().as_str(), &request_str)
+                .await
         };
-        
+
         let elapsed = start.elapsed().as_nanos() as i64;
-        DURATION.fetch_add(elapsed, Ordering::Relaxed);
-        
-        let (response, is_hit, is_error, cache_key) = match &result {
-            Ok((resp, hit, _err, key)) => (resp, *hit, false, *key),
-            Err(_) => {
+
+        let (response, cache_hit, cache_key_attr) = match result {
+            Ok((resp, hit, _is_error, key)) => (resp, hit, key),
+            Err(err) => {
+                DURATION.fetch_add(elapsed, Ordering::Relaxed);
                 ERROR_DURATION.fetch_add(elapsed, Ordering::Relaxed);
                 ERRORED.fetch_add(1, Ordering::Relaxed);
                 let status_code = StatusCode::SERVICE_UNAVAILABLE.as_u16();
                 prom_metrics::inc_status_code(status_code);
-                
+
                 // Set tracing attributes for error case
                 if let Some(ref s) = span {
                     s.record(traces::ATTR_HTTP_STATUS_CODE_KEY, status_code);
@@ -178,56 +211,44 @@ impl CacheProxyController {
                     s.record(traces::ATTR_CACHE_KEY, 0i64); // No cache key available on error
                     s.record(traces::ATTR_CACHE_IS_ERR, true);
                 }
-                
-                return match result {
-                    Err(e) => controller.respond_service_unavailable(&e),
-                    _ => unreachable!(),
-                };
+
+                return controller.respond_service_unavailable(&err, &request_str);
             }
         };
-        
+
         let status_code = response.status().as_u16();
-        
+
         // Get response size from content-length header or use 0
-        let response_size = response.headers()
+        let response_size = response
+            .headers()
             .get("content-length")
             .and_then(|v| v.to_str().ok())
             .and_then(|s| s.parse::<usize>().ok())
             .unwrap_or(0);
-        
+
         // Record status code metric
         prom_metrics::inc_status_code(status_code);
-        
+
+        // Update duration metrics
+        DURATION.fetch_add(elapsed, Ordering::Relaxed);
+        match path_kind {
+            PathKind::Cache => CACHE_DURATION.fetch_add(elapsed, Ordering::Relaxed),
+            PathKind::Proxy => PROXY_DURATION.fetch_add(elapsed, Ordering::Relaxed),
+        };
+
         // Set tracing span attributes after handling
         if let Some(ref s) = span {
-            if !controller.cfg.is_enabled() {
+            if matches!(path_kind, PathKind::Proxy) && !controller.cfg.is_enabled() {
                 s.record(traces::ATTR_CACHE_PROXY, true);
             }
-            s.record(traces::ATTR_CACHE_HIT, is_hit);
-            s.record(traces::ATTR_CACHE_IS_ERR, is_error);
-            s.record(traces::ATTR_CACHE_KEY, cache_key as i64);
+            s.record(traces::ATTR_CACHE_HIT, cache_hit);
+            s.record(traces::ATTR_CACHE_IS_ERR, false);
+            s.record(traces::ATTR_CACHE_KEY, cache_key_attr as i64);
             s.record(traces::ATTR_HTTP_STATUS_CODE_KEY, status_code);
             s.record(traces::ATTR_HTTP_RESPONSE_SIZE_KEY, response_size);
         }
-        
-        match result {
-            Ok((response, is_hit, is_error, _cache_key)) => {
-                if is_error {
-                    ERROR_DURATION.fetch_add(elapsed, Ordering::Relaxed);
-                    ERRORED.fetch_add(1, Ordering::Relaxed);
-                } else if is_hit {
-                    CACHE_DURATION.fetch_add(elapsed, Ordering::Relaxed);
-                } else if !controller.cfg.is_enabled() {
-                    PROXY_DURATION.fetch_add(elapsed, Ordering::Relaxed);
-                }
-                response
-            }
-            Err(e) => {
-                ERROR_DURATION.fetch_add(elapsed, Ordering::Relaxed);
-                ERRORED.fetch_add(1, Ordering::Relaxed);
-                controller.respond_service_unavailable(&e)
-            }
-        }
+
+        response
     }
 
     /// Handles request through cache (cache mode).
@@ -237,10 +258,11 @@ impl CacheProxyController {
         query_str: &str,
         request_headers: &[(String, String)],
         _method: &str,
+        request_str: &str,
     ) -> Result<(Response, bool, bool, u64), CacheError> {
         // Attempts to find cache rule in config. Otherwise just proxy it.
         let rule = match match_cache_rule(&self.cfg, path_bytes) {
-            Ok(r) => Arc::new(r.clone()),
+            Ok(r) => r, // Already Arc<Rule>, just clone the Arc
             Err(e) => {
                 if is_cache_rule_not_found_err(&*e) {
                     return Err(CacheError::NeedRetryThroughProxy);
@@ -249,107 +271,85 @@ impl CacheProxyController {
             }
         };
 
-        // Convert headers to byte format for Entry
-        let headers_bytes: Vec<(Vec<u8>, Vec<u8>)> = filter_and_sort_headers(Some(&*rule), request_headers)
+        // Extract forwarded_host from original headers BEFORE filtering.
+        // This ensures X-Forwarded-Host and Host are available even if not in cache key whitelist.
+        let headers_bytes_for_forwarded: Vec<(Vec<u8>, Vec<u8>)> = request_headers
             .iter()
-            .map(|(k, v)| (k.clone(), v.clone()))
+            .map(|(k, v)| (k.as_bytes().to_vec(), v.as_bytes().to_vec()))
             .collect();
-        let queries_bytes: Vec<(Vec<u8>, Vec<u8>)> = filter_and_sort_queries(Some(&*rule), query_str)
-            .iter()
-            .map(|(k, v)| (k.clone(), v.clone()))
-            .collect();
-
-        // Build a lightweight entry with only keys for search.
-        let mut request_entry = Entry::new(rule.clone(), &queries_bytes, &headers_bytes);
-
-        // Search entry in cache.
-        let (cache_entry_opt, hit) = self.cache.get(&request_entry);
+        let forwarded_host = crate::upstream::proxy::forwarded_host_value_bytes(&headers_bytes_for_forwarded);
         
+        let headers_bytes = filter_and_sort_headers(Some(&rule), request_headers);
+        let queries_bytes = filter_and_sort_queries(Some(&rule), query_str);
+
+        let request_entry = crate::model::Entry::new(rule.clone(), queries_bytes.as_ref(), headers_bytes.as_ref());
+
+        let (cache_entry_opt, hit) = self.cache.get(&request_entry);
+
         if hit {
             if let Some(cache_entry) = cache_entry_opt {
-                // Record hit
                 HITS.fetch_add(1, Ordering::Relaxed);
 
-                // Write found entry in response (retry through proxy on error).
-                let cache_key = cache_entry.key(); // Get key for span attributes
+                let cache_key = cache_entry.key();
                 return match renderer::write_from_entry(&cache_entry) {
-                    Ok(response) => {
-                        Ok((response, true, false, cache_key))
-                    }
+                    Ok(response) => Ok((response, true, false, cache_key)),
                     Err(e) => {
-                        error!(
-                            error = %e,
-                            reason = ERR_MSG_WRITE_ENTRY_TO_RESPONSE,
-                            "failed to write entry to response"
-                        );
+                dedlog::err(Some(e.as_ref()), Some(request_str), ERR_MSG_WRITE_ENTRY_TO_RESPONSE);
                         Err(CacheError::NeedRetryThroughProxy)
                     }
-                }
+                };
             }
         }
 
-        // Cache entry was not found, record miss.
         MISSES.fetch_add(1, Ordering::Relaxed);
 
-        // Get cache key before moving request_entry
         let cache_key = request_entry.key();
-
-        // Proxy request to upstream.
-        // Trace context is automatically propagated through active span
-        let upstream_resp = match self.upstream.request(
-            &*rule,
-            &queries_bytes,
-            &headers_bytes,
-            self.shutdown_token.clone(),
-        ).await {
+        
+        // Add forwarded_host to headers_bytes so it's available in request().
+        // This ensures Host header is passed to upstream even if not in cache key whitelist.
+        // Note: We clone headers_bytes because it was moved into request_entry above.
+        let mut headers_bytes_with_host = headers_bytes.clone();
+        if let Some(host_bytes) = forwarded_host {
+            headers_bytes_with_host.push((b"host".to_vec(), host_bytes.to_vec()));
+        }
+        
+        let upstream_resp = match self
+            .upstream
+            .request(&rule, queries_bytes.as_ref(), &headers_bytes_with_host)
+            .await
+        {
             Ok(resp) => resp,
             Err(e) => {
-                error!(
-                    error = %e,
-                    reason = ERR_MSG_UPSTREAM_ERROR_WHILE_CACHE_PROXYING,
-                    "upstream request failed"
-                );
+            dedlog::err(Some(e.as_ref()), Some(request_str), ERR_MSG_UPSTREAM_ERROR_WHILE_CACHE_PROXYING);
                 return Err(CacheError::Other(e));
             }
         };
 
-        // Validate upstream response and store it if possible.
         let mut refreshed_at = 0i64;
-        let mut is_error_status = false;
-        
         if upstream_resp.status == 200 {
-            // Build and set up new cache entry payload.
-            // Convert upstream response to model::Response format
             let model_response = ModelResponse {
                 status: upstream_resp.status,
                 headers: upstream_resp.headers.clone(),
                 body: upstream_resp.body.clone(),
             };
-            
+
             request_entry.set_payload(&queries_bytes, &headers_bytes, &model_response);
 
-            // Trying to store entry in cache (it may be denied in order to admission policy).
             if self.cache.set(request_entry) {
                 refreshed_at = time::unix_nano();
             }
         } else {
-            // Handle upstream status code (write log on error).
-            self.log_on_err_status_code(upstream_resp.status);
-            if upstream_resp.status >= 500 {
-                is_error_status = true;
-            }
+            self.log_on_err_status_code(upstream_resp.status, request_str);
         }
 
-        // Write fetched response.
-        // Convert upstream::Response to model::Response
         let model_resp = ModelResponse {
             status: upstream_resp.status,
             headers: upstream_resp.headers.clone(),
             body: upstream_resp.body.clone(),
         };
         let response = renderer::write_from_response(&model_resp, refreshed_at);
-        
-        Ok((response, false, is_error_status, cache_key))
+
+        Ok((response, false, false, cache_key))
     }
 
     /// Handles request through proxy (proxy mode).
@@ -359,66 +359,51 @@ impl CacheProxyController {
         query_str: &str,
         request_headers: &[(String, String)],
         method: &str,
+        request_str: &str,
     ) -> Result<(Response, bool, bool, u64), CacheError> {
-        // Fetch missed data from upstream
-        // Trace context is automatically propagated through active span
-        let upstream_resp = match self.upstream.proxy_request(
-            method,
-            path,
-            query_str,
-            request_headers,
-            None,
-            self.shutdown_token.clone(),
-        ).await {
+        let upstream_resp = match self
+            .upstream
+            .proxy_request(
+                method,
+                path,
+                query_str,
+                request_headers,
+                None,
+            )
+            .await
+        {
             Ok(resp) => resp,
             Err(e) => {
-                error!(
-                    error = %e,
-                    reason = ERR_MSG_UPSTREAM_ERROR_WHILE_PROXYING,
-                    "proxy request failed"
-                );
+                // Use dedlog for error logging
+                dedlog::err(Some(e.as_ref()), Some(request_str), ERR_MSG_UPSTREAM_ERROR_WHILE_PROXYING);
                 return Err(CacheError::Other(e));
             }
         };
-        
-        let mut is_error_status = false;
-        self.log_on_err_status_code(upstream_resp.status);
-        if upstream_resp.status >= 500 {
-            is_error_status = true;
-        }
-        
-        // Write fetched response and return it
-        // Convert upstream::Response to model::Response
+
+        self.log_on_err_status_code(upstream_resp.status, request_str);
+
         let model_resp = ModelResponse {
             status: upstream_resp.status,
             headers: upstream_resp.headers.clone(),
             body: upstream_resp.body.clone(),
         };
         let response = renderer::write_from_response(&model_resp, 0);
-        // For proxy mode, we don't have a cache key, so use 0
-        Ok((response, false, is_error_status, 0))
+        Ok((response, false, false, 0))
     }
 
     /// Logs error on non-OK status codes.
-    fn log_on_err_status_code(&self, code: u16) {
+    fn log_on_err_status_code(&self, code: u16, request_str: &str) {
         if code >= 500 {
-            error!(
-                reason = ERR_MSG_UPSTREAM_INTERNAL_ERROR,
-                status_code = code,
-                "upstream returned error status"
-            );
+            dedlog::err(None, Some(request_str), ERR_MSG_UPSTREAM_INTERNAL_ERROR);
             ERRORED.fetch_add(1, Ordering::Relaxed);
         }
     }
 
     /// Returns 503 Service Unavailable response and logs the error.
-    fn respond_service_unavailable(&self, err: &dyn std::error::Error) -> Response {
-        error!(
-            error = %err,
-            reason = ERR_MSG_INTERNAL_ERROR,
-            "service unavailable"
-        );
-        
+    fn respond_service_unavailable(&self, err: &dyn std::error::Error, request_str: &str) -> Response {
+        // Use dedlog for error logging
+        dedlog::err(Some(err), Some(request_str), ERR_MSG_INTERNAL_ERROR);
+
         let mut headers = HeaderMap::new();
         if let (Ok(name), Ok(value)) = (
             axum::http::header::HeaderName::try_from("x-error-reason".as_bytes()),
@@ -430,18 +415,19 @@ impl CacheProxyController {
             axum::http::header::CONTENT_TYPE,
             HeaderValue::from_static("application/json"),
         );
-        
-        const UNAVAILABLE_RESPONSE_BODY: &[u8] = b"{\"status\":503,\"error\":\"Service Unavailable\",\"message\":\"Sorry for that, please try again later or contact support.\"}";
-        
+
+        let body = crate::http::render::templates::UNAVAILABLE_RESPONSE_BODY;
+
         Response::builder()
             .status(StatusCode::SERVICE_UNAVAILABLE)
-            .header("content-length", UNAVAILABLE_RESPONSE_BODY.len())
-            .body(UNAVAILABLE_RESPONSE_BODY.to_vec().into())
+            .header("content-length", body.len())
+            .body(body.to_vec().into())
             .map(|mut resp| {
                 *resp.headers_mut() = headers;
                 resp
             })
-            .unwrap_or_else(|_| {
+            .unwrap_or_else(|e| {
+                dedlog::err(Some(&e), Some(request_str), "attempt to write service unavailable response failed");
                 Response::builder()
                     .status(StatusCode::INTERNAL_SERVER_ERROR)
                     .body(Vec::new().into())
@@ -454,12 +440,12 @@ impl CacheProxyController {
         let cfg = self.cfg.clone();
         let cache = self.cache.clone();
         let shutdown_token = self.shutdown_token.clone();
-        
+
         tokio::task::spawn(async move {
             let mut interval = interval(Duration::from_secs(5));
             interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
             let mut prev = time::now();
-            
+
             loop {
                 tokio::select! {
                     _ = shutdown_token.cancelled() => {
@@ -472,7 +458,7 @@ impl CacheProxyController {
                         let misses_num = MISSES.swap(0, Ordering::Relaxed);
                         let proxied_num = PROXIED.swap(0, Ordering::Relaxed);
                         let errors_num = ERRORED.swap(0, Ordering::Relaxed);
-                        let panics = panics_counter() as i64; // Note: panics_counter doesn't have swap, so we just read
+                        let panics = panics_counter() as i64;
                         let total_duration_num = DURATION.swap(0, Ordering::Relaxed);
                         let cache_duration_num = CACHE_DURATION.swap(0, Ordering::Relaxed);
                         let proxy_duration_num = PROXY_DURATION.swap(0, Ordering::Relaxed);
@@ -541,9 +527,17 @@ impl CacheProxyController {
                         prom_metrics::flush_status_code_counters();
 
                         if cfg.is_enabled() {
-                            let hit_rate = safe::divide(hits_num, hits_num + misses_num) * 100.0;
-                            let err_rate = safe::divide(errors_num, total_num) * 100.0;
-                            
+                            let hit_rate = if hits_num + misses_num > 0 {
+                                (hits_num as f64 / (hits_num + misses_num) as f64) * 100.0
+                            } else {
+                                0.0
+                            };
+                            let err_rate = if total_num > 0 {
+                                (errors_num as f64 / total_num as f64) * 100.0
+                            } else {
+                                0.0
+                            };
+
                             info!(
                                 target = "cache-controller",
                                 upstream_policy = ?actual_policy(),
@@ -559,8 +553,12 @@ impl CacheProxyController {
                                 "ingress"
                             );
                         } else {
-                            let err_rate = safe::divide(errors_num, total_num) * 100.0;
-                            
+                            let err_rate = if total_num > 0 {
+                                (errors_num as f64 / total_num as f64) * 100.0
+                            } else {
+                                0.0
+                            };
+
                             info!(
                                 target = "proxy-controller",
                                 upstream_policy = ?actual_policy(),
@@ -585,17 +583,16 @@ impl CacheProxyController {
 impl Controller for CacheProxyController {
     fn add_route(&self, router: Router) -> Router {
         let controller = Arc::new(self.clone());
-        // Use fallback handler for catch-all route (wildcard)
-        // In axum, fallback handles all requests that don't match other routes
-        router.fallback({
-            let controller = controller.clone();
-            move |request: axum::extract::Request| {
+        router.route(
+            "/*path",
+            get({
                 let controller = controller.clone();
-                async move {
-                    Self::index(State(controller), request).await
+                move |request: axum::extract::Request| {
+                    let controller = controller.clone();
+                    async move { Self::index(State(controller), request).await }
                 }
-            }
-        })
+            }),
+        )
     }
 }
 

@@ -1,15 +1,10 @@
-// Package api provides backend policy controller.
+//! Backend policy controller.
 
-use axum::{
-    http::StatusCode,
-    response::IntoResponse,
-    routing::get,
-    Router,
-};
+use axum::{http::StatusCode, response::IntoResponse, routing::get, Router};
 use serde::Serialize;
 
 use crate::http::Controller;
-use crate::upstream::{Policy, actual_policy, change_policy};
+use crate::upstream::{actual_policy, change_policy, Policy};
 
 /// Backend policy response structure.
 #[derive(Debug, Serialize)]
@@ -79,9 +74,14 @@ impl Default for ChangeBackendPolicyController {
 impl Controller for ChangeBackendPolicyController {
     fn add_route(&self, router: Router) -> Router {
         router
-            .route("/advcache/upstream/policy/await", get(Self::turn_on_await_policy))
-            .route("/advcache/upstream/policy/deny", get(Self::turn_on_deny_policy))
+            .route(
+                "/advcache/upstream/policy/await",
+                get(Self::turn_on_await_policy),
+            )
+            .route(
+                "/advcache/upstream/policy/deny",
+                get(Self::turn_on_deny_policy),
+            )
             .route("/advcache/upstream/policy", get(Self::show_policy))
     }
 }
-

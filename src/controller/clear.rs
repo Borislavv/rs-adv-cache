@@ -1,4 +1,4 @@
-// Package api provides cache clear controller.
+//! Cache clear controller.
 
 use axum::{
     extract::{Query, State},
@@ -15,7 +15,7 @@ use tokio::sync::Mutex;
 
 use crate::config::{Config, ConfigTrait};
 use crate::http::Controller;
-use crate::storage::Storage;
+use crate::db::Storage;
 use crate::time;
 
 /// Query parameters for clear endpoint.
@@ -74,63 +74,12 @@ impl ClearController {
         let now = time::now();
         let raw_token = params.token;
 
-        if raw_token.is_none() {
-            // Return or reuse token
-            let mut state = controller.token_state.lock().await;
-            
-            if let Some(ref token) = state.token {
-                if now < state.expires {
-                    let expires_millis = state.expires
-                        .duration_since(UNIX_EPOCH)
-                        .unwrap()
-                        .as_millis() as i64;
-                    
-                    let resp = TokenResponse {
-                        token: token.clone(),
-                        expires_at: expires_millis,
-                    };
-                    
-                    return (
-                        StatusCode::OK,
-                        [("content-type", "application/json")],
-                        serde_json::to_string(&resp).unwrap_or_default(),
-                    );
-                }
-            }
-
-            // Generate new token
-            let mut bytes = [0u8; 16];
-            rand::thread_rng().fill_bytes(&mut bytes);
-            let token = hex::encode(bytes);
-            let expires = now + Duration::from_secs(5 * 60); // 5 minutes
-
-            state.token = Some(token.clone());
-            state.expires = expires;
-
-            let expires_millis = expires
-                .duration_since(UNIX_EPOCH)
-                .unwrap()
-                .as_millis() as i64;
-
-            let resp = TokenResponse {
-                token,
-                expires_at: expires_millis,
-            };
-
-            (
-                StatusCode::OK,
-                [("content-type", "application/json")],
-                serde_json::to_string(&resp).unwrap_or_default(),
-            )
-        } else {
+        if let Some(token) = raw_token {
             // Validate provided token
-            let token = raw_token.unwrap();
             let mut state = controller.token_state.lock().await;
-            
-            let valid = state.token.as_ref()
-                .map(|t| t == &token)
-                .unwrap_or(false)
-                && now < state.expires;
+
+            let valid =
+                state.token.as_ref().map(|t| t == &token).unwrap_or(false) && now < state.expires;
 
             // Clear token after use
             state.token = None;
@@ -141,7 +90,7 @@ impl ClearController {
                     cleared: None,
                     error: Some("invalid or expired token".to_string()),
                 };
-                
+
                 return (
                     StatusCode::FORBIDDEN,
                     [("content-type", "application/json")],
@@ -160,15 +109,58 @@ impl ClearController {
                     "storage cleared"
                 );
             } else {
-                tracing::info!(
-                    component = "clear",
-                    "storage cleared"
-                );
+                tracing::info!(component = "clear", "storage cleared");
             }
 
             let resp = ClearStatusResponse {
                 cleared: Some(true),
                 error: None,
+            };
+
+            (
+                StatusCode::OK,
+                [("content-type", "application/json")],
+                serde_json::to_string(&resp).unwrap_or_default(),
+            )
+        } else {
+            // Return or reuse token
+            let mut state = controller.token_state.lock().await;
+
+            if let Some(ref token) = state.token {
+                if now < state.expires {
+                    let expires_millis = state
+                        .expires
+                        .duration_since(UNIX_EPOCH)
+                        .unwrap()
+                        .as_millis() as i64;
+
+                    let resp = TokenResponse {
+                        token: token.clone(),
+                        expires_at: expires_millis,
+                    };
+
+                    return (
+                        StatusCode::OK,
+                        [("content-type", "application/json")],
+                        serde_json::to_string(&resp).unwrap_or_default(),
+                    );
+                }
+            }
+
+            // Generate new token
+            let mut bytes = [0u8; 16];
+            rand::thread_rng().fill_bytes(&mut bytes);
+            let token = hex::encode(bytes);
+            let expires = now + Duration::from_secs(5 * 60);
+
+            state.token = Some(token.clone());
+            state.expires = expires;
+
+            let expires_millis = expires.duration_since(UNIX_EPOCH).unwrap().as_millis() as i64;
+
+            let resp = TokenResponse {
+                token,
+                expires_at: expires_millis,
             };
 
             (
@@ -183,13 +175,13 @@ impl ClearController {
 impl Controller for ClearController {
     fn add_route(&self, router: Router) -> Router {
         let controller = Arc::new(self.clone());
-        router
-            .route("/advcache/clear", get(move |query: Query<ClearQuery>| {
+        router.route(
+            "/advcache/clear",
+            get(move |query: Query<ClearQuery>| {
                 let controller = controller.clone();
-                async move {
-                    Self::handle_clear(query, State(controller)).await
-                }
-            }))
+                async move { Self::handle_clear(query, State(controller)).await }
+            }),
+        )
     }
 }
 
@@ -202,4 +194,3 @@ impl Clone for ClearController {
         }
     }
 }
-

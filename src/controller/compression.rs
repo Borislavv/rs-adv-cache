@@ -1,15 +1,10 @@
-// Package api provides HTTP compression controller.
+//! HTTP compression controller.
 
-use axum::{
-    http::StatusCode,
-    response::IntoResponse,
-    routing::get,
-    Router,
-};
+use axum::{http::StatusCode, response::IntoResponse, routing::get, Router};
 use serde::Serialize;
 
 use crate::http::Controller;
-use crate::http::{enable_compression, disable_compression, is_compression_enabled};
+use crate::http::{disable_compression, enable_compression, is_compression_enabled};
 
 /// Status response structure.
 #[derive(Debug, Serialize)]
@@ -83,4 +78,3 @@ impl Controller for HttpCompressionController {
             .route("/advcache/http/compression/off", get(Self::off))
     }
 }
-

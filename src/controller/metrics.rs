@@ -1,11 +1,6 @@
-// Package api provides metrics controller.
+//! Metrics controller.
 
-use axum::{
-    http::StatusCode,
-    response::IntoResponse,
-    routing::get,
-    Router,
-};
+use axum::{http::StatusCode, response::IntoResponse, routing::get, Router};
 
 use crate::http::Controller;
 
@@ -23,19 +18,15 @@ impl PrometheusMetricsController {
     /// Handles the metrics request.
     async fn get_metrics() -> impl IntoResponse {
         use metrics_exporter_prometheus::PrometheusBuilder;
-        
-        let metrics_text = match PrometheusBuilder::new()
-            .install()
-        {
+
+        let metrics_text = match PrometheusBuilder::new().install() {
             Ok(_) => {
                 metrics::describe_counter!(crate::metrics::TOTAL, "Total number of requests");
                 "# Metrics available\n".to_string()
             }
-            Err(_) => {
-                "# Metrics exporter not initialized\n".to_string()
-            }
+            Err(_) => "# Metrics exporter not initialized\n".to_string(),
         };
-        
+
         (
             StatusCode::OK,
             [("content-type", "text/plain; charset=utf-8")],
@@ -55,4 +46,3 @@ impl Controller for PrometheusMetricsController {
         router.route(PROMETHEUS_METRICS_PATH, get(Self::get_metrics))
     }
 }
-

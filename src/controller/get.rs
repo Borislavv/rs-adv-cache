@@ -1,18 +1,17 @@
-// Package api provides cache entry retrieval controller.
+//! Cache entry retrieval controller.
 
 use axum::{
     extract::{Query, State},
     http::StatusCode,
     response::IntoResponse,
     routing::get,
-    Router,
-    Json,
+    Json, Router,
 };
 use serde::Deserialize;
 use std::sync::Arc;
 
 use crate::http::Controller;
-use crate::storage::Storage;
+use crate::db::Storage;
 
 /// Query parameters for get endpoint.
 #[derive(Deserialize)]
@@ -51,17 +50,13 @@ impl GetController {
         };
 
         let (entry, hit) = controller.db.get_by_key(key);
-        
+
         if !hit {
             return (StatusCode::NOT_FOUND, "").into_response();
         }
 
-        if let Some(_entry) = entry {
-            let json = serde_json::json!({
-                "key": key,
-                "found": true,
-            });
-            
+        if let Some(entry) = entry {
+            let json = entry.to_map();
             (StatusCode::OK, Json(json)).into_response()
         } else {
             (StatusCode::NOT_FOUND, "").into_response()
@@ -72,13 +67,13 @@ impl GetController {
 impl Controller for GetController {
     fn add_route(&self, router: Router) -> Router {
         let controller = Arc::new(self.clone());
-        router
-            .route("/advcache/entry", get(move |query: Query<GetQuery>| {
+        router.route(
+            "/advcache/entry",
+            get(move |query: Query<GetQuery>| {
                 let controller = controller.clone();
-                async move {
-                    Self::get(query, State(controller)).await
-                }
-            }))
+                async move { Self::get(query, State(controller)).await }
+            }),
+        )
     }
 }
 
@@ -89,4 +84,3 @@ impl Clone for GetController {
         }
     }
 }
-

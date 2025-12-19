@@ -1,4 +1,4 @@
-// Package api provides liveness probe controller.
+//! Liveness probe controller.
 
 use axum::{
     http::StatusCode,
@@ -23,18 +23,18 @@ const FAILED_RESPONSE: &str = r#"{
 
 /// LivenessProbeController handles Kubernetes liveness probes.
 pub struct LivenessProbeController {
-    probe: Arc<liveness::Probe>,
+    probe: Arc<dyn liveness::Prober>,
 }
 
 impl LivenessProbeController {
     /// Creates a new liveness probe controller.
-    pub fn new(probe: Arc<liveness::Probe>) -> Self {
+    pub fn new(probe: Arc<dyn liveness::Prober>) -> Self {
         Self { probe }
     }
 
     /// Handles the probe request.
     async fn probe(&self) -> Response {
-        if self.probe.is_alive_async().await {
+        if self.probe.is_alive() {
             (StatusCode::OK, SUCCESS_RESPONSE).into_response()
         } else {
             (StatusCode::SERVICE_UNAVAILABLE, FAILED_RESPONSE).into_response()
@@ -45,12 +45,27 @@ impl LivenessProbeController {
 impl Controller for LivenessProbeController {
     fn add_route(&self, router: Router) -> Router {
         let probe_controller = self.clone();
-        router.route("/k8s/probe", get(move || {
-            let controller = probe_controller.clone();
-            async move {
-                controller.probe().await
-            }
-        }))
+        router
+            .route(
+                "/k8s/probe",
+                get({
+                    let controller = probe_controller.clone();
+                    move || {
+                        let controller = controller.clone();
+                        async move { controller.probe().await }
+                    }
+                }),
+            )
+            .route(
+                "/healthz",
+                get({
+                    let controller = probe_controller.clone();
+                    move || {
+                        let controller = controller.clone();
+                        async move { controller.probe().await }
+                    }
+                }),
+            )
     }
 }
 
@@ -61,4 +76,3 @@ impl Clone for LivenessProbeController {
         }
     }
 }
-

@@ -1,11 +1,6 @@
-// Package api provides traces controller.
+//! Traces controller.
 
-use axum::{
-    http::StatusCode,
-    response::IntoResponse,
-    routing::get,
-    Router,
-};
+use axum::{http::StatusCode, response::IntoResponse, routing::get, Router};
 use serde::Serialize;
 
 use crate::http::Controller;
@@ -65,4 +60,3 @@ impl Controller for TracesController {
             .route("/advcache/traces/off", get(Self::off))
     }
 }
-

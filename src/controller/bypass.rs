@@ -1,11 +1,6 @@
-// Package api provides cache bypass (on/off) controller.
+//! Cache bypass (on/off) controller.
 
-use axum::{
-    http::StatusCode,
-    response::IntoResponse,
-    routing::get,
-    Router,
-};
+use axum::{http::StatusCode, response::IntoResponse, routing::get, Router};
 use serde::Serialize;
 use std::sync::Arc;
 
@@ -28,9 +23,7 @@ pub struct BypassOnOffController {
 impl BypassOnOffController {
     /// Creates a new OnOffController instance.
     pub fn new(cfg: Config) -> Self {
-        Self {
-            cfg: Arc::new(cfg),
-        }
+        Self { cfg: Arc::new(cfg) }
     }
 
     /// Handles POST /adv-cache/on and enables the advanced cache, returning JSON.
@@ -80,19 +73,59 @@ impl Controller for BypassOnOffController {
         let cfg1 = self.cfg.clone();
         let cfg2 = self.cfg.clone();
         let cfg3 = self.cfg.clone();
+        let router = router
+            .route(
+                "/advcache/bypass/on",
+                get(move || {
+                    let cfg = cfg1.clone();
+                    async move { Self::off(cfg).await }
+                }),
+            )
+            .route(
+                "/advcache/bypass/off",
+                get(move || {
+                    let cfg = cfg2.clone();
+                    async move { Self::on(cfg).await }
+                }),
+            )
+            .route(
+                "/advcache/bypass",
+                get(move || {
+                    let cfg = cfg3.clone();
+                    async move { Self::bypass_is(cfg).await }
+                }),
+            )
+            .route(
+                "/cache/bypass/on",
+                get({
+                    let cfg = self.cfg.clone();
+                    move || {
+                        let cfg = cfg.clone();
+                        async move { Self::off(cfg).await }
+                    }
+                }),
+            )
+            .route(
+                "/cache/bypass/off",
+                get({
+                    let cfg = self.cfg.clone();
+                    move || {
+                        let cfg = cfg.clone();
+                        async move { Self::on(cfg).await }
+                    }
+                }),
+            )
+            .route(
+                "/cache/bypass",
+                get({
+                    let cfg = self.cfg.clone();
+                    move || {
+                        let cfg = cfg.clone();
+                        async move { Self::bypass_is(cfg).await }
+                    }
+                }),
+            );
+
         router
-            .route("/advcache/bypass/on", get(move || {
-                let cfg = cfg1.clone();
-                async move { Self::off(cfg).await }
-            }))
-            .route("/advcache/bypass/off", get(move || {
-                let cfg = cfg2.clone();
-                async move { Self::on(cfg).await }
-            }))
-            .route("/advcache/bypass", get(move || {
-                let cfg = cfg3.clone();
-                async move { Self::bypass_is(cfg).await }
-            }))
     }
 }
-
