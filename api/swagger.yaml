@@ -1,828 +1,1017 @@
 openapi: 3.0.3
 info:
   title: API Documentation of AdvCache
-  description: "Community-maintained specification.\nNotes:\n  • All `/scale` endpoints\
-    \ accept query parameter `?to=<int>` (target replicas).\n  • `/advcache/invalidate`\
-    \ accepts any query params, optional `_path` query for path filtering, and `_remove`\
-    \ or `remove=true` query to remove entries instead of marking them.\n  • `/advcache/clear`\
-    \ is two-step: first call returns a token; second call requires `?token={token}`\
-    \ to execute.\n"
+  description: |
+    High-performance HTTP cache and reverse proxy API.
+    
+    Key features:
+    - Cache control: bypass, clear, invalidate entries
+    - Worker management: eviction, lifetime manager (refresh/expiry)
+    - Configuration: runtime config inspection and adjustment
+    - Monitoring: metrics, traces, health checks
+    - Upstream control: policy management (await/deny)
+    
+    Notes:
+    - All `/scale` endpoints accept query parameter `?to=<int>` (target replicas)
+    - `/advcache/invalidate` requires `_path` query parameter and accepts any additional query params for matching. Use `_remove` query parameter to remove entries instead of marking them as outdated
+    - `/advcache/clear` is two-step: first call returns a token; second call requires `?token={token}` to execute
+    - Main cache/proxy route matches any path (`/*path`) and serves cached content or proxies to upstream
   version: 0.3.2
 servers:
   - url: http://localhost:8020
+    description: Default local development server
 tags:
   - name: Bypass
-    description: Bypass/short-circuit cache behavior toggles.
+    description: Cache bypass controls. When bypass is enabled, all requests are proxied directly to upstream without caching.
   - name: Clear
-    description: Cache clear orchestration endpoints.
+    description: Cache clearing operations with token-based security (two-step process).
   - name: Config
-    description: Runtime configuration inspection.
+    description: Runtime configuration inspection and display.
   - name: Entry
-    description: Single-entry cache operations.
+    description: Single cache entry operations (get entry by key).
   - name: Eviction
-    description: Eviction workers, policies and scaling.
+    description: Eviction worker management (scaling, enable/disable).
   - name: HTTP Compression
-    description: Compression settings for HTTP responses.
+    description: HTTP response compression middleware controls.
   - name: Invalidate
-    description: Invalidate related endpoints.
+    description: Cache invalidation by path and query parameters.
   - name: K8s
-    description: Kubernetes probes and runtime health.
+    description: Kubernetes health probes and liveness checks.
   - name: Lifetime Manager
-    description: Background refresh/expiry and related controls.
+    description: Background lifetime manager worker controls (TTL expiry/refresh, scaling, policy).
   - name: Traces/Metrics
-    description: Metrics and runtime signals for monitoring.
+    description: OpenTelemetry tracing and Prometheus metrics endpoints.
   - name: Upstream
-    description: Upstream policy, quarantine and health checks.
+    description: Upstream backend policy management (await/deny modes).
   - name: Admission
-    description: TinyLFU/Doorkeeper admission control toggles.
+    description: TinyLFU/Doorkeeper admission control enable/disable.
 components:
+  schemas:
+    StatusResponse:
+      type: object
+      properties:
+        enabled:
+          type: boolean
+          description: Current enabled/disabled status
+        message:
+          type: string
+          description: Status message
+      required:
+        - enabled
+    InvalidateResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          description: Whether the invalidation operation succeeded
+        affected:
+          type: integer
+          format: int64
+          description: Number of cache entries affected by the invalidation
+      required:
+        - success
+        - affected
+    ClearTokenResponse:
+      type: object
+      properties:
+        token:
+          type: string
+          description: One-time token for cache clearing (valid for 5 minutes)
+        expiresAt:
+          type: integer
+          format: int64
+          description: Token expiration timestamp in milliseconds
+      required:
+        - token
+        - expiresAt
+    ClearStatusResponse:
+      type: object
+      properties:
+        cleared:
+          type: boolean
+          description: Whether the cache was successfully cleared (present on success)
+        error:
+          type: string
+          description: Error message if clearing failed (present on error)
+    PolicyResponse:
+      type: object
+      properties:
+        current:
+          type: string
+          enum: [await, deny]
+          description: Current upstream policy mode
+      required:
+        - current
+    WorkerConfigResponse:
+      type: object
+      properties:
+        enabled:
+          type: boolean
+          description: Whether the worker is enabled
+        replicas:
+          type: integer
+          description: Number of worker replicas
+        frequency:
+          type: object
+          properties:
+            limit_per_sec:
+              type: integer
+              description: Rate limit per second
+            interval_ns:
+              type: integer
+              format: int64
+              description: Tick frequency interval in nanoseconds
+          required:
+            - limit_per_sec
+            - interval_ns
+      required:
+        - enabled
+        - replicas
+        - frequency
+    TracesResponse:
+      type: object
+      properties:
+        is_active:
+          type: boolean
+          description: Whether OpenTelemetry tracing is active
+      required:
+        - is_active
+    AdmissionResponse:
+      type: object
+      properties:
+        is_active:
+          type: boolean
+          description: Whether admission control (TinyLFU/Doorkeeper) is active
+      required:
+        - is_active
+    LifetimePolicyResponse:
+      type: object
+      properties:
+        on_ttl:
+          type: string
+          enum: [refresh, remove]
+          description: Current lifetime policy - refresh (serve stale while refreshing) or remove (delete expired entries)
+      required:
+        - on_ttl
+    HealthResponse:
+      type: object
+      properties:
+        status:
+          type: integer
+          description: HTTP status code (200 for healthy, 503 for unhealthy)
+        message:
+          type: string
+          description: Health status message
+      required:
+        - status
+        - message
   responses:
     BadRequest:
-      description: Bad request.
+      description: Bad request - invalid parameters or missing required fields
+      content:
+        application/json:
+          schema:
+            type: object
     Unauthorized:
-      description: Authentication required.
+      description: Authentication required (not currently used)
     NotFound:
-      description: Resource not found.
+      description: Resource not found (e.g., cache rule not found for path)
+      content:
+        application/json:
+          schema:
+            type: object
     TooManyRequests:
-      description: Rate limit exceeded.
+      description: Rate limit exceeded
     InternalError:
-      description: Internal server error.
+      description: Internal server error
+      content:
+        text/plain:
+          schema:
+            type: string
 paths:
-  /advcache/bypass:
+  /healthz:
     get:
       tags:
-        - Bypass
-      operationId: get_cache_bypass_BypassIs
-      summary: Bypass Is
+        - K8s
+      operationId: healthz
+      summary: Health check endpoint
+      description: Kubernetes-compatible health check endpoint. Returns 200 if service is healthy, 503 if unhealthy.
       responses:
         '200':
-          description: OK
+          description: Service is healthy
           content:
             application/json:
               schema:
-                type: object
-        '400':
-          $ref: '#/components/responses/BadRequest'
-        '404':
-          $ref: '#/components/responses/NotFound'
-        '500':
-          $ref: '#/components/responses/InternalError'
-      x-handlers:
-        - c.BypassIs
-  /advcache/bypass/off:
-    get:
-      tags:
-        - Bypass
-      operationId: get_cache_bypass_off_On
-      responses:
-        '200':
-          description: OK
+                $ref: '#/components/schemas/HealthResponse'
+              example:
+                status: 200
+                message: "I'm fine :D"
+        '503':
+          description: Service is unhealthy
           content:
             application/json:
               schema:
-                type: object
-        '400':
-          $ref: '#/components/responses/BadRequest'
-        '404':
-          $ref: '#/components/responses/NotFound'
-        '500':
-          $ref: '#/components/responses/InternalError'
-      x-handlers:
-        - c.On
-  /advcache/bypass/on:
-    get:
-      tags:
-        - Bypass
-      operationId: get_cache_bypass_on_Off
-      responses:
-        '200':
-          description: OK
-          content:
-            application/json:
-              schema:
-                type: object
-        '400':
-          $ref: '#/components/responses/BadRequest'
-        '404':
-          $ref: '#/components/responses/NotFound'
-        '500':
-          $ref: '#/components/responses/InternalError'
-      x-handlers:
-        - c.Off
-  /advcache/clear:
-    get:
-      tags:
-        - Clear
-      operationId: get_cache_clear_HandleClear
-      summary: Two-step cache clear
-      description: 'First call without query parameters returns a one-time token.
-
-        Second call must pass the token as query parameter (?token={token}) to perform
-        the deletion.
-
-        '
-      parameters:
-        - name: token
-          in: query
-          required: false
-          description: One-time token obtained from the first step.
-          schema:
-            type: string
-      responses:
-        '200':
-          description: On first call returns a token; on second call (with token)
-            performs deletion.
-          content:
-            application/json:
-              schema:
-                oneOf:
-                  - type: object
-                    properties:
-                      token:
-                        type: string
-                        description: One-time token to be used in the second call.
-                  - type: object
-                    properties:
-                      status:
-                        type: string
-                        example: cleared
-      x-handlers:
-        - c.HandleClear
-  /advcache/config:
-    get:
-      tags:
-        - Config
-      operationId: get_cache_config_ShowConfig
-      summary: Show Config
-      responses:
-        '200':
-          description: OK
-          content:
-            application/json:
-              schema:
-                type: object
-        '400':
-          $ref: '#/components/responses/BadRequest'
-        '404':
-          $ref: '#/components/responses/NotFound'
-        '500':
-          $ref: '#/components/responses/InternalError'
-      x-handlers:
-        - c.ShowConfig
-  /advcache/entry:
-    get:
-      tags:
-        - Entry
-      operationId: get_cache_entry_Get
-      summary: Get
-      responses:
-        '200':
-          description: OK
-          content:
-            application/json:
-              schema:
-                type: object
-        '400':
-          $ref: '#/components/responses/BadRequest'
-        '404':
-          $ref: '#/components/responses/NotFound'
-        '500':
-          $ref: '#/components/responses/InternalError'
-      x-handlers:
-        - c.Get
-  /advcache/eviction:
-    get:
-      tags:
-        - Eviction
-      operationId: get_cache_eviction_Get
-      summary: Get
-      responses:
-        '200':
-          description: OK
-          content:
-            application/json:
-              schema:
-                type: object
-        '400':
-          $ref: '#/components/responses/BadRequest'
-        '404':
-          $ref: '#/components/responses/NotFound'
-        '500':
-          $ref: '#/components/responses/InternalError'
-      x-handlers:
-        - c.Get
-  /advcache/eviction/off:
-    get:
-      tags:
-        - Eviction
-      operationId: get_cache_eviction_off_Off
-      responses:
-        '200':
-          description: OK
-          content:
-            application/json:
-              schema:
-                type: object
-        '400':
-          $ref: '#/components/responses/BadRequest'
-        '404':
-          $ref: '#/components/responses/NotFound'
-        '500':
-          $ref: '#/components/responses/InternalError'
-      x-handlers:
-        - c.Off
-  /advcache/eviction/on:
-    get:
-      tags:
-        - Eviction
-      operationId: get_cache_eviction_on_On
-      responses:
-        '200':
-          description: OK
-          content:
-            application/json:
-              schema:
-                type: object
-        '400':
-          $ref: '#/components/responses/BadRequest'
-        '404':
-          $ref: '#/components/responses/NotFound'
-        '500':
-          $ref: '#/components/responses/InternalError'
-      x-handlers:
-        - c.On
-  /advcache/eviction/scale:
-    get:
-      tags:
-        - Eviction
-      operationId: get_cache_eviction_scale_Scale
-      summary: Scale
-      parameters:
-        - name: to
-          in: query
-          required: true
-          description: Target number of replicas to scale to.
-          schema:
-            type: integer
-            minimum: 0
-      responses:
-        '200':
-          description: OK
-          content:
-            application/json:
-              schema:
-                type: object
-        '400':
-          $ref: '#/components/responses/BadRequest'
-        '404':
-          $ref: '#/components/responses/NotFound'
-        '500':
-          $ref: '#/components/responses/InternalError'
-      x-handlers:
-        - c.Scale
-  /advcache/http/compression:
-    get:
-      tags:
-        - HTTP Compression
-      operationId: get_cache_http_compression_Get
-      summary: Get
-      responses:
-        '200':
-          description: OK
-          content:
-            application/json:
-              schema:
-                type: object
-        '400':
-          $ref: '#/components/responses/BadRequest'
-        '404':
-          $ref: '#/components/responses/NotFound'
-        '500':
-          $ref: '#/components/responses/InternalError'
-      x-handlers:
-        - c.Get
-  /advcache/http/compression/off:
-    get:
-      tags:
-        - HTTP Compression
-      operationId: get_cache_http_compression_off_Off
-      responses:
-        '200':
-          description: OK
-          content:
-            application/json:
-              schema:
-                type: object
-        '400':
-          $ref: '#/components/responses/BadRequest'
-        '404':
-          $ref: '#/components/responses/NotFound'
-        '500':
-          $ref: '#/components/responses/InternalError'
-      x-handlers:
-        - c.Off
-  /advcache/http/compression/on:
-    get:
-      tags:
-        - HTTP Compression
-      operationId: get_cache_http_compression_on_On
-      responses:
-        '200':
-          description: OK
-          content:
-            application/json:
-              schema:
-                type: object
-        '400':
-          $ref: '#/components/responses/BadRequest'
-        '404':
-          $ref: '#/components/responses/NotFound'
-        '500':
-          $ref: '#/components/responses/InternalError'
-      x-handlers:
-        - c.On
-  /advcache/invalidate:
-    get:
-      tags:
-        - Invalidate
-      operationId: get_cache_invalidate_Invalidate
-      summary: Invalidate
-      description: Any query parameters are available. For specify path use _path
-        query parameter. Use _remove query parameter to remove entries instead of marking them.
-      parameters:
-        - name: _path
-          in: query
-          required: false
-          description: Request path filter to scope invalidation (exact or prefix, depending
-            on implementation).
-          schema:
-            type: string
-        - name: _remove
-          in: query
-          required: false
-          description: If present, entries are removed; if absent, entries are only
-            marked as outdated.
-          schema:
-            type: string
-        - name: remove
-          in: query
-          required: false
-          description: Alternative to _remove. Set to "true" to remove entries instead of marking them.
-          schema:
-            type: string
-            enum: ["true"]
-      x-accepts-any-query: true
-      responses:
-        '200':
-          description: OK
-          content:
-            application/json:
-              schema:
-                type: object
-        '400':
-          $ref: '#/components/responses/BadRequest'
-        '404':
-          $ref: '#/components/responses/NotFound'
-        '500':
-          $ref: '#/components/responses/InternalError'
-      x-handlers:
-        - c.Invalidate
-  /advcache/lifetime-manager:
-    get:
-      tags:
-        - Lifetime Manager
-      operationId: get_cache_lifetimemanager_Get
-      summary: Get
-      responses:
-        '200':
-          description: OK
-          content:
-            application/json:
-              schema:
-                type: object
-        '400':
-          $ref: '#/components/responses/BadRequest'
-        '404':
-          $ref: '#/components/responses/NotFound'
-        '500':
-          $ref: '#/components/responses/InternalError'
-      x-handlers:
-        - c.Get
-  /advcache/lifetime-manager/off:
-    get:
-      tags:
-        - Lifetime Manager
-      operationId: get_cache_lifetimemanager_off_Off
-      responses:
-        '200':
-          description: OK
-          content:
-            application/json:
-              schema:
-                type: object
-        '400':
-          $ref: '#/components/responses/BadRequest'
-        '404':
-          $ref: '#/components/responses/NotFound'
-        '500':
-          $ref: '#/components/responses/InternalError'
-      x-handlers:
-        - c.Off
-  /advcache/lifetime-manager/on:
-    get:
-      tags:
-        - Lifetime Manager
-      operationId: get_cache_lifetimemanager_on_On
-      responses:
-        '200':
-          description: OK
-          content:
-            application/json:
-              schema:
-                type: object
-        '400':
-          $ref: '#/components/responses/BadRequest'
-        '404':
-          $ref: '#/components/responses/NotFound'
-        '500':
-          $ref: '#/components/responses/InternalError'
-      x-handlers:
-        - c.On
-  /advcache/lifetime-manager/policy:
-    get:
-      tags:
-        - Lifetime Manager
-      operationId: get_cache_lifetimemanager_policy_Policy
-      summary: Policy
-      responses:
-        '200':
-          description: OK
-          content:
-            application/json:
-              schema:
-                type: object
-        '400':
-          $ref: '#/components/responses/BadRequest'
-        '404':
-          $ref: '#/components/responses/NotFound'
-        '500':
-          $ref: '#/components/responses/InternalError'
-      x-handlers:
-        - c.Policy
-  /advcache/lifetime-manager/policy/refresh:
-    get:
-      tags:
-        - Lifetime Manager
-      operationId: get_cache_lifetimemanager_policy_refresh_ToRefreshPolicy
-      summary: To Refresh Policy
-      responses:
-        '200':
-          description: OK
-          content:
-            application/json:
-              schema:
-                type: object
-        '400':
-          $ref: '#/components/responses/BadRequest'
-        '404':
-          $ref: '#/components/responses/NotFound'
-        '500':
-          $ref: '#/components/responses/InternalError'
-      x-handlers:
-        - c.ToRefreshPolicy
-  /advcache/lifetime-manager/policy/remove:
-    get:
-      tags:
-        - Lifetime Manager
-      operationId: get_cache_lifetimemanager_policy_remove_ToRemovePolicy
-      summary: To Remove Policy
-      responses:
-        '200':
-          description: OK
-          content:
-            application/json:
-              schema:
-                type: object
-        '400':
-          $ref: '#/components/responses/BadRequest'
-        '404':
-          $ref: '#/components/responses/NotFound'
-        '500':
-          $ref: '#/components/responses/InternalError'
-      x-handlers:
-        - c.ToRemovePolicy
-  /advcache/lifetime-manager/scale:
-    get:
-      tags:
-        - Lifetime Manager
-      operationId: get_cache_lifetimemanager_scale_Scale
-      summary: Scale
-      parameters:
-        - name: to
-          in: query
-          required: true
-          description: Target number of replicas to scale to.
-          schema:
-            type: integer
-            minimum: 0
-      responses:
-        '200':
-          description: OK
-          content:
-            application/json:
-              schema:
-                type: object
-        '400':
-          $ref: '#/components/responses/BadRequest'
-        '404':
-          $ref: '#/components/responses/NotFound'
-        '500':
-          $ref: '#/components/responses/InternalError'
-      x-handlers:
-        - c.Scale
-  /advcache/upstream/policy:
-    get:
-      tags:
-        - Upstream
-      operationId: get_cache_upstream_policy_ShowPolicy
-      summary: Show Policy
-      responses:
-        '200':
-          description: OK
-          content:
-            application/json:
-              schema:
-                type: object
-        '400':
-          $ref: '#/components/responses/BadRequest'
-        '404':
-          $ref: '#/components/responses/NotFound'
-        '500':
-          $ref: '#/components/responses/InternalError'
-      x-handlers:
-        - c.ShowPolicy
-  /advcache/upstream/policy/await:
-    get:
-      tags:
-        - Upstream
-      operationId: get_cache_upstream_policy_await_TurnOnAwaitPolicy
-      summary: Turn On Await Policy
-      responses:
-        '200':
-          description: OK
-          content:
-            application/json:
-              schema:
-                type: object
-        '400':
-          $ref: '#/components/responses/BadRequest'
-        '404':
-          $ref: '#/components/responses/NotFound'
-        '500':
-          $ref: '#/components/responses/InternalError'
-      x-handlers:
-        - c.TurnOnAwaitPolicy
-  /advcache/upstream/policy/deny:
-    get:
-      tags:
-        - Upstream
-      operationId: get_cache_upstream_policy_deny_TurnOnDenyPolicy
-      summary: Turn On Deny Policy
-      responses:
-        '200':
-          description: OK
-          content:
-            application/json:
-              schema:
-                type: object
-        '400':
-          $ref: '#/components/responses/BadRequest'
-        '404':
-          $ref: '#/components/responses/NotFound'
-        '500':
-          $ref: '#/components/responses/InternalError'
-      x-handlers:
-        - c.TurnOnDenyPolicy
+                $ref: '#/components/schemas/HealthResponse'
+              example:
+                status: 503
+                message: "I'm tired :("
   /k8s/probe:
     get:
       tags:
         - K8s
-      operationId: get_k8s_probe_Probe
-      summary: Probe
+      operationId: k8s_probe
+      summary: Kubernetes liveness probe
+      description: Kubernetes liveness probe endpoint. Checks if the service is alive and responding.
       responses:
         '200':
-          description: OK
+          description: Service is alive
           content:
             application/json:
               schema:
-                type: object
-        '400':
-          $ref: '#/components/responses/BadRequest'
-        '404':
-          $ref: '#/components/responses/NotFound'
-        '500':
-          $ref: '#/components/responses/InternalError'
-      x-handlers:
-        - c.Probe
+                $ref: '#/components/schemas/HealthResponse'
+              example:
+                status: 200
+                message: "I'm fine :D"
+        '503':
+          description: Service is not alive
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+              example:
+                status: 503
+                message: "I'm tired :("
   /metrics:
     get:
       tags:
-        - Observability
-      operationId: get_metrics_Get
-      summary: Get
+        - Traces/Metrics
+      operationId: get_metrics
+      summary: Prometheus metrics endpoint
+      description: Returns Prometheus-formatted metrics in text/plain format. Used for monitoring and observability.
       responses:
         '200':
-          description: OK
+          description: Metrics in Prometheus format
           content:
-            application/json:
+            text/plain:
               schema:
-                type: object
-        '400':
-          $ref: '#/components/responses/BadRequest'
-        '404':
-          $ref: '#/components/responses/NotFound'
-        '500':
-          $ref: '#/components/responses/InternalError'
-      x-handlers:
-        - m.Get
-  /advcache/traces:
+                type: string
+                example: "# Metrics available\n"
+  /advcache/bypass:
     get:
       tags:
-        - Traces
-      operationId: get_cache_traces_Get
-      summary: Get
+        - Bypass
+      operationId: get_bypass_status
+      summary: Get cache bypass status
+      description: Returns the current cache bypass status. When bypass is enabled, all requests are proxied directly to upstream without caching.
       responses:
         '200':
-          description: OK
+          description: Current bypass status
           content:
             application/json:
               schema:
-                type: object
-        '400':
-          $ref: '#/components/responses/BadRequest'
-        '404':
-          $ref: '#/components/responses/NotFound'
-        '500':
-          $ref: '#/components/responses/InternalError'
-      x-handlers:
-        - c.Get
-  /advcache/traces/on:
+                $ref: '#/components/schemas/StatusResponse'
+              example:
+                enabled: false
+                message: "bypass"
+  /advcache/bypass/on:
     get:
       tags:
-        - Traces
-      operationId: get_cache_traces_on_On
-      summary: 'On'
+        - Bypass
+      operationId: enable_bypass
+      summary: Enable cache bypass
+      description: "Enables cache bypass mode. All subsequent requests will be proxied directly to upstream without caching. Note: despite the path name 'on', this actually enables bypass (disables caching)."
       responses:
         '200':
-          description: OK
+          description: Bypass enabled successfully
           content:
             application/json:
               schema:
-                type: object
-        '400':
-          $ref: '#/components/responses/BadRequest'
-        '404':
-          $ref: '#/components/responses/NotFound'
-        '500':
-          $ref: '#/components/responses/InternalError'
-      x-handlers:
-        - c.On
-  /advcache/traces/off:
+                $ref: '#/components/schemas/StatusResponse'
+              example:
+                enabled: true
+                message: "bypass"
+  /advcache/bypass/off:
     get:
       tags:
-        - Traces
-      operationId: get_cache_traces_off_Off
-      summary: 'Off'
+        - Bypass
+      operationId: disable_bypass
+      summary: Disable cache bypass
+      description: "Disables cache bypass mode. Cache will be active for subsequent requests. Note: despite the path name 'off', this actually disables bypass (enables caching)."
       responses:
         '200':
-          description: OK
+          description: Bypass disabled successfully (cache enabled)
           content:
             application/json:
               schema:
-                type: object
-        '400':
-          $ref: '#/components/responses/BadRequest'
-        '404':
-          $ref: '#/components/responses/NotFound'
-        '500':
-          $ref: '#/components/responses/InternalError'
-      x-handlers:
-        - c.Off
-  /advcache/admission:
+                $ref: '#/components/schemas/StatusResponse'
+              example:
+                enabled: false
+                message: "bypass"
+  /cache/bypass:
     get:
       tags:
-        - Admission
-      operationId: get_cache_admission_Get
-      summary: Get
+        - Bypass
+      operationId: get_bypass_status_legacy
+      summary: Get cache bypass status (legacy path)
+      description: Legacy path for getting bypass status. Same as `/advcache/bypass`. Maintained for backward compatibility.
       responses:
         '200':
-          description: OK
+          description: Current bypass status
           content:
             application/json:
               schema:
-                type: object
-        '400':
-          $ref: '#/components/responses/BadRequest'
-        '404':
-          $ref: '#/components/responses/NotFound'
-        '500':
-          $ref: '#/components/responses/InternalError'
-      x-handlers:
-        - c.Get
-  /advcache/admission/on:
+                $ref: '#/components/schemas/StatusResponse'
+  /cache/bypass/on:
     get:
       tags:
-        - Admission
-      operationId: get_cache_admission_on_On
-      summary: 'On'
+        - Bypass
+      operationId: enable_bypass_legacy
+      summary: Enable cache bypass (legacy path)
+      description: Legacy path for enabling bypass. Same as `/advcache/bypass/on`. Maintained for backward compatibility.
       responses:
         '200':
-          description: OK
+          description: Bypass enabled successfully
           content:
             application/json:
               schema:
-                type: object
-        '400':
-          $ref: '#/components/responses/BadRequest'
-        '404':
-          $ref: '#/components/responses/NotFound'
-        '500':
-          $ref: '#/components/responses/InternalError'
-      x-handlers:
-        - c.On
-  /advcache/admission/off:
+                $ref: '#/components/schemas/StatusResponse'
+  /cache/bypass/off:
     get:
       tags:
-        - Admission
-      operationId: get_cache_admission_off_Off
-      summary: 'Off'
+        - Bypass
+      operationId: disable_bypass_legacy
+      summary: Disable cache bypass (legacy path)
+      description: Legacy path for disabling bypass. Same as `/advcache/bypass/off`. Maintained for backward compatibility.
       responses:
         '200':
-          description: OK
+          description: Bypass disabled successfully
           content:
             application/json:
               schema:
-                type: object
-        '400':
-          $ref: '#/components/responses/BadRequest'
-        '404':
-          $ref: '#/components/responses/NotFound'
-        '500':
-          $ref: '#/components/responses/InternalError'
-      x-handlers:
-        - c.Off
-  /advcache/lifetime-manager/rate:
+                $ref: '#/components/schemas/StatusResponse'
+  /advcache/clear:
     get:
       tags:
-        - Lifetime Manager
-      operationId: get_cache_lifetimemanager_rate_Rate
-      summary: Rate
-      responses:
-        '200':
-          description: OK
-          content:
-            application/json:
-              schema:
-                type: object
-        '400':
-          $ref: '#/components/responses/BadRequest'
-        '404':
-          $ref: '#/components/responses/NotFound'
-        '500':
-          $ref: '#/components/responses/InternalError'
-      x-handlers:
-        - c.Rate
+        - Clear
+      operationId: clear_cache
+      summary: Clear entire cache (two-step process)
+      description: |
+        Two-step cache clearing process for safety:
+        1. First call (without token): Returns a one-time token valid for 5 minutes
+        2. Second call (with token): Performs the actual cache clearing
+        
+        This prevents accidental cache clears. The token expires after 5 minutes.
       parameters:
-        - name: to
+        - name: token
           in: query
-          required: true
-          description: Target QPS rate limit to set.
-          schema:
-            type: integer
-            minimum: 0
-  /{any}:
-    get:
-      tags:
-        - Entry
-      operationId: get_any_MainRoute
-      summary: Main cache/proxy route
-      description: Matches any path segment (splat). In code this is `/{any:*}` and
-        serves as the primary cache/proxy endpoint.
-      parameters:
-        - name: any
-          in: path
-          required: true
-          description: Catch‑all path segment.
+          required: false
+          description: One-time token obtained from the first step. Required for the second step to actually clear the cache.
           schema:
             type: string
       responses:
         '200':
-          description: OK
+          description: |
+            On first call (without token): Returns a token to be used in the second call.
+            On second call (with token): Returns success status after clearing cache.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/ClearTokenResponse'
+                  - $ref: '#/components/schemas/ClearStatusResponse'
+              examples:
+                token_response:
+                  summary: First call response
+                  value:
+                    token: "a1b2c3d4e5f6789012345678901234ab"
+                    expiresAt: 1704067200000
+                cleared_response:
+                  summary: Second call response (success)
+                  value:
+                    cleared: true
+        '403':
+          description: Invalid or expired token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ClearStatusResponse'
+              example:
+                error: "invalid or expired token"
+  /advcache/config:
+    get:
+      tags:
+        - Config
+      operationId: show_config
+      summary: Show current configuration
+      description: Returns the current runtime configuration as JSON. Includes all cache rules, upstream settings, worker configurations, and other runtime parameters.
+      responses:
+        '200':
+          description: Current configuration
+          content:
+            application/json:
+              schema:
+                type: object
+                description: Full configuration object (structure depends on config file format)
+              example:
+                cache:
+                  enabled: true
+                  shards: 256
+                upstream:
+                  url: "http://localhost:8080"
+  /advcache/entry:
+    get:
+      tags:
+        - Entry
+      operationId: get_entry
+      summary: Get cache entry by key
+      description: Retrieves a specific cache entry by its numeric key. The key is a hash computed from the request path, query parameters, and headers according to cache rules.
+      parameters:
+        - name: key
+          in: query
+          required: true
+          description: Numeric cache entry key (uint64)
+          schema:
+            type: string
+            pattern: '^\d+$'
+      responses:
+        '200':
+          description: Cache entry found
+          content:
+            application/json:
+              schema:
+                type: object
+                description: Cache entry data (structure depends on entry content)
+        '404':
+          description: Entry not found or key not provided
+          $ref: '#/components/responses/NotFound'
+        '500':
+          description: Invalid key format
+          $ref: '#/components/responses/InternalError'
+  /advcache/invalidate:
+    get:
+      tags:
+        - Invalidate
+      operationId: invalidate_entries
+      summary: Invalidate cache entries by path and query parameters
+      description: |
+        Invalidates cache entries matching the specified path and query parameters.
+        
+        **Required parameter:**
+        - `_path`: Request path to match (must match a cache rule)
+        
+        **Optional parameters:**
+        - `_remove`: If present (any value), entries are immediately removed from cache. If absent, entries are marked as outdated (will be refreshed by lifetime manager worker on next access)
+        - Any additional query parameters: Used to match specific cache entries (must match exactly as stored)
+        
+        The matching process:
+        1. Finds cache rule for the `_path`
+        2. Filters and sorts query parameters according to the rule's whitelist
+        3. Matches entries that have the same filtered query string
+        4. Either marks them as outdated or removes them depending on `_remove` parameter
+      parameters:
+        - name: _path
+          in: query
+          required: true
+          description: Request path to match (must match a configured cache rule)
+          schema:
+            type: string
+            example: "/api/v1/user"
+        - name: _remove
+          in: query
+          required: false
+          description: If present, entries are removed immediately. If absent, entries are only marked as outdated.
+          schema:
+            type: string
+        - name: user[id]
+          in: query
+          required: false
+          description: Example query parameter for matching (any query params from cache rule whitelist can be used)
+          schema:
+            type: string
+            example: "12345"
+      x-accepts-any-query: true
+      responses:
+        '200':
+          description: Invalidation completed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InvalidateResponse'
+              example:
+                success: true
+                affected: 5
+        '400':
+          description: Missing required `_path` parameter
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InvalidateResponse'
+              example:
+                success: false
+                affected: 0
+        '404':
+          description: Cache rule not found for the specified path
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InvalidateResponse'
+              example:
+                success: false
+                affected: 0
+  /advcache/eviction:
+    get:
+      tags:
+        - Eviction
+      operationId: get_eviction_config
+      summary: Get eviction worker configuration
+      description: Returns the current eviction worker configuration including enabled status, number of replicas, and frequency settings.
+      responses:
+        '200':
+          description: Eviction worker configuration
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkerConfigResponse'
+              example:
+                enabled: true
+                replicas: 2
+                frequency:
+                  limit_per_sec: 100
+                  interval_ns: 1000000000
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /advcache/eviction/on:
+    get:
+      tags:
+        - Eviction
+      operationId: enable_eviction
+      summary: Enable eviction worker
+      description: Enables the eviction worker. The worker will start removing entries when memory limits are exceeded.
+      responses:
+        '200':
+          description: Eviction enabled
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkerConfigResponse'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /advcache/eviction/off:
+    get:
+      tags:
+        - Eviction
+      operationId: disable_eviction
+      summary: Disable eviction worker
+      description: Disables the eviction worker. Cache entries will not be evicted even if memory limits are exceeded.
+      responses:
+        '200':
+          description: Eviction disabled
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkerConfigResponse'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /advcache/eviction/scale:
+    get:
+      tags:
+        - Eviction
+      operationId: scale_eviction
+      summary: Scale eviction worker replicas
+      description: Changes the number of eviction worker replicas. More replicas can process evictions faster but consume more resources.
+      parameters:
+        - name: to
+          in: query
+          required: true
+          description: Target number of worker replicas (must be >= 0)
+          schema:
+            type: integer
+            minimum: 0
+            example: 4
+      responses:
+        '200':
+          description: Eviction worker scaled successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkerConfigResponse'
+        '400':
+          description: Invalid or missing 'to' parameter
+          $ref: '#/components/responses/BadRequest'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /advcache/http/compression:
+    get:
+      tags:
+        - HTTP Compression
+      operationId: get_compression_status
+      summary: Get HTTP compression status
+      description: Returns whether HTTP response compression middleware is currently enabled.
+      responses:
+        '200':
+          description: Compression status
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StatusResponse'
+              example:
+                enabled: true
+                message: "compression"
+  /advcache/http/compression/on:
+    get:
+      tags:
+        - HTTP Compression
+      operationId: enable_compression
+      summary: Enable HTTP compression
+      description: Enables HTTP response compression middleware. Responses will be compressed using gzip/brotli if the client supports it.
+      responses:
+        '200':
+          description: Compression enabled
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StatusResponse'
+              example:
+                enabled: true
+                message: "compression"
+  /advcache/http/compression/off:
+    get:
+      tags:
+        - HTTP Compression
+      operationId: disable_compression
+      summary: Disable HTTP compression
+      description: Disables HTTP response compression middleware. Responses will be served uncompressed.
+      responses:
+        '200':
+          description: Compression disabled
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StatusResponse'
+              example:
+                enabled: false
+                message: "compression"
+  /advcache/lifetime-manager:
+    get:
+      tags:
+        - Lifetime Manager
+      operationId: get_lifetime_manager_config
+      summary: Get lifetime manager worker configuration
+      description: Returns the current lifetime manager worker configuration. This worker handles TTL expiry and refresh policies.
+      responses:
+        '200':
+          description: Lifetime manager configuration
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkerConfigResponse'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /advcache/lifetime-manager/on:
+    get:
+      tags:
+        - Lifetime Manager
+      operationId: enable_lifetime_manager
+      summary: Enable lifetime manager worker
+      description: Enables the lifetime manager worker. The worker will start processing expired entries according to the configured policy (refresh or remove).
+      responses:
+        '200':
+          description: Lifetime manager enabled
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkerConfigResponse'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /advcache/lifetime-manager/off:
+    get:
+      tags:
+        - Lifetime Manager
+      operationId: disable_lifetime_manager
+      summary: Disable lifetime manager worker
+      description: Disables the lifetime manager worker. Expired entries will not be automatically refreshed or removed.
+      responses:
+        '200':
+          description: Lifetime manager disabled
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkerConfigResponse'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /advcache/lifetime-manager/scale:
+    get:
+      tags:
+        - Lifetime Manager
+      operationId: scale_lifetime_manager
+      summary: Scale lifetime manager worker replicas
+      description: Changes the number of lifetime manager worker replicas. More replicas can process expired entries faster.
+      parameters:
+        - name: to
+          in: query
+          required: true
+          description: Target number of worker replicas (must be >= 0)
+          schema:
+            type: integer
+            minimum: 0
+            example: 3
+      responses:
+        '200':
+          description: Lifetime manager scaled successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkerConfigResponse'
+        '400':
+          description: Invalid or missing 'to' parameter
+          $ref: '#/components/responses/BadRequest'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /advcache/lifetime-manager/rate:
+    get:
+      tags:
+        - Lifetime Manager
+      operationId: set_lifetime_manager_rate
+      summary: Set lifetime manager rate limit
+      description: Sets the rate limit (QPS - queries per second) for the lifetime manager worker. Limits how many refresh operations can be performed per second.
+      parameters:
+        - name: to
+          in: query
+          required: true
+          description: Target QPS rate limit (must be >= 0)
+          schema:
+            type: integer
+            minimum: 0
+            example: 50
+      responses:
+        '200':
+          description: Rate limit updated successfully
+          content:
+            text/plain:
+              schema:
+                type: string
+                example: "rate updated to 50"
+        '400':
+          description: Invalid or missing 'to' parameter
+          $ref: '#/components/responses/BadRequest'
+        '500':
+          description: Failed to reload service with new rate limit
+          content:
+            text/plain:
+              schema:
+                type: string
+                example: "failed to reload service: ..."
+  /advcache/lifetime-manager/policy:
+    get:
+      tags:
+        - Lifetime Manager
+      operationId: get_lifetime_policy
+      summary: Get lifetime policy
+      description: Returns the current lifetime policy mode - either "refresh" (serve stale content while refreshing in background) or "remove" (delete expired entries immediately).
+      responses:
+        '200':
+          description: Current lifetime policy
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LifetimePolicyResponse'
+              example:
+                on_ttl: "refresh"
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /advcache/lifetime-manager/policy/refresh:
+    get:
+      tags:
+        - Lifetime Manager
+      operationId: set_refresh_policy
+      summary: Set refresh policy
+      description: Sets the lifetime policy to "refresh". Expired entries will be served as stale while being refreshed in the background. This provides better user experience but uses more resources.
+      responses:
+        '200':
+          description: Policy set to refresh
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LifetimePolicyResponse'
+              example:
+                on_ttl: "refresh"
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /advcache/lifetime-manager/policy/remove:
+    get:
+      tags:
+        - Lifetime Manager
+      operationId: set_remove_policy
+      summary: Set remove policy
+      description: Sets the lifetime policy to "remove". Expired entries will be immediately deleted and will not be served. Next request will fetch fresh data from upstream.
+      responses:
+        '200':
+          description: Policy set to remove
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LifetimePolicyResponse'
+              example:
+                on_ttl: "remove"
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /advcache/upstream/policy:
+    get:
+      tags:
+        - Upstream
+      operationId: show_upstream_policy
+      summary: Show current upstream policy
+      description: Returns the current upstream policy mode - either "await" (wait for upstream response) or "deny" (immediately return error if upstream is unavailable).
+      responses:
+        '200':
+          description: Current upstream policy
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PolicyResponse'
+              example:
+                current: "await"
+  /advcache/upstream/policy/await:
+    get:
+      tags:
+        - Upstream
+      operationId: set_await_policy
+      summary: Set await policy
+      description: Sets upstream policy to "await" mode. The cache will wait for upstream responses and serve them normally. If upstream is slow or unavailable, requests will wait (with timeout).
+      responses:
+        '200':
+          description: Policy set to await
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PolicyResponse'
+              example:
+                current: "await"
+  /advcache/upstream/policy/deny:
+    get:
+      tags:
+        - Upstream
+      operationId: set_deny_policy
+      summary: Set deny policy
+      description: Sets upstream policy to "deny" mode. If upstream is unavailable or unhealthy, requests will immediately return an error instead of waiting. This prevents cascading failures but may serve errors to clients.
+      responses:
+        '200':
+          description: Policy set to deny
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PolicyResponse'
+              example:
+                current: "deny"
+  /advcache/traces:
+    get:
+      tags:
+        - Traces/Metrics
+      operationId: get_traces_status
+      summary: Get OpenTelemetry tracing status
+      description: Returns whether OpenTelemetry distributed tracing is currently enabled.
+      responses:
+        '200':
+          description: Tracing status
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TracesResponse'
+              example:
+                is_active: true
+  /advcache/traces/on:
+    get:
+      tags:
+        - Traces/Metrics
+      operationId: enable_traces
+      summary: Enable OpenTelemetry tracing
+      description: "Enables OpenTelemetry distributed tracing. Traces will be sent to the configured OTLP endpoint. Note: This may impact performance on hot paths."
+      responses:
+        '200':
+          description: Tracing enabled
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TracesResponse'
+              example:
+                is_active: true
+  /advcache/traces/off:
+    get:
+      tags:
+        - Traces/Metrics
+      operationId: disable_traces
+      summary: Disable OpenTelemetry tracing
+      description: Disables OpenTelemetry distributed tracing. Traces will not be collected, improving performance.
+      responses:
+        '200':
+          description: Tracing disabled
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TracesResponse'
+              example:
+                is_active: false
+  /advcache/admission:
+    get:
+      tags:
+        - Admission
+      operationId: get_admission_status
+      summary: Get admission control status
+      description: Returns whether TinyLFU/Doorkeeper admission control is currently enabled. Admission control helps optimize cache by preventing low-value entries from entering the cache.
+      responses:
+        '200':
+          description: Admission control status
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdmissionResponse'
+              example:
+                is_active: true
+  /advcache/admission/on:
+    get:
+      tags:
+        - Admission
+      operationId: enable_admission
+      summary: Enable admission control
+      description: Enables TinyLFU/Doorkeeper admission control. The cache will use frequency estimation to decide which entries are worth caching.
+      responses:
+        '200':
+          description: Admission control enabled
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdmissionResponse'
+              example:
+                is_active: true
+  /advcache/admission/off:
+    get:
+      tags:
+        - Admission
+      operationId: disable_admission
+      summary: Disable admission control
+      description: Disables TinyLFU/Doorkeeper admission control. All entries that fit in memory will be cached without frequency-based filtering.
+      responses:
+        '200':
+          description: Admission control disabled
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdmissionResponse'
+              example:
+                is_active: false
+  /{any}:
+    get:
+      tags:
+        - Entry
+      operationId: main_cache_proxy_route
+      summary: Main cache/proxy route
+      description: |
+        Catch-all route that handles all cache and proxy requests. This is the primary endpoint for serving cached content or proxying to upstream.
+        
+        **Behavior:**
+        1. If cache is enabled and entry exists and is fresh: serves from cache
+        2. If cache is enabled and entry exists but is expired: serves stale content (if refresh policy) and refreshes in background, or returns error (if remove policy)
+        3. If cache is enabled and entry doesn't exist: fetches from upstream, caches response, and returns it
+        4. If cache is bypassed: proxies directly to upstream without caching
+        
+        **Cache key calculation:**
+        - Based on request path, whitelisted query parameters (sorted), and whitelisted headers
+        - Only parameters/headers defined in cache rules are used for key calculation
+        
+        **Response headers:**
+        - Cached responses include cache metadata headers
+        - Hop-by-hop headers are stripped from responses
+      parameters:
+        - name: any
+          in: path
+          required: true
+          description: Request path (can be any path matching configured cache rules)
+          schema:
+            type: string
+            example: "/api/v1/user"
+        - name: user[id]
+          in: query
+          required: false
+          description: "Example query parameter (any query params from cache rule whitelist can be used)"
+          schema:
+            type: string
+            example: "12345"
+      x-accepts-any-query: true
+      responses:
+        '200':
+          description: Successful response (from cache or upstream)
+          content:
+            application/json:
+              schema:
+                type: object
+                description: Response body depends on upstream response
         '400':
           $ref: '#/components/responses/BadRequest'
         '404':
           $ref: '#/components/responses/NotFound'
         '500':
           $ref: '#/components/responses/InternalError'
-      x-handlers:
-        - c.Index
+        '502':
+          description: Bad gateway - upstream error (when await policy and upstream fails)
+        '503':
+          description: Service unavailable - upstream unavailable (when deny policy and upstream is down)
