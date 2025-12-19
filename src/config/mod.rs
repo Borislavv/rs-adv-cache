@@ -577,3 +577,4 @@ impl Config {
 
 // Test config is always available for integration tests
 mod test_config;
+pub use test_config::new_test_config;
