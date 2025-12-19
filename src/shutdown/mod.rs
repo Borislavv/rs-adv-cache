@@ -1,11 +1,11 @@
-// Package shutdown provides graceful shutdown functionality.
+//! Graceful shutdown functionality.
 
 use anyhow::Result;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::signal;
-use tokio_util::sync::CancellationToken;
 use tokio::time::timeout;
+use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
 
 #[derive(Debug, thiserror::Error)]
@@ -13,7 +13,7 @@ use tracing::{error, info, warn};
 pub struct TimeoutError;
 
 /// Graceful shutdown handler
-/// Similar to Go's Graceful struct but using Rust async primitives
+/// Graceful shutdown handler using Rust async primitives
 #[derive(Clone)]
 pub struct GracefulShutdown {
     shutdown_token: CancellationToken,
@@ -36,13 +36,13 @@ impl GracefulShutdown {
         *self.timeout.write().await = timeout;
     }
 
-    /// Adds to the wait counter (similar to sync.WaitGroup.Add)
+    /// Adds to the wait counter
     pub fn add(&self, n: usize) {
         // Add permits to the semaphore
         self.counter.add_permits(n);
     }
 
-    /// Marks one task as done (similar to sync.WaitGroup.Done)
+    /// Marks one task as done
     pub fn done(&self) {
         // Release one permit
         let _ = self.counter.try_acquire();
@@ -77,9 +77,9 @@ impl GracefulShutdown {
         self.shutdown_token.cancel();
 
         let timeout_duration = *self.timeout.read().await;
-        
+
         // Wait for all tasks to complete, with timeout
-        match timeout(timeout_duration, self.wait_for_completion()).await {
+        let result = match timeout(timeout_duration, self.wait_for_completion()).await {
             Ok(_) => {
                 info!(
                     component = "graceful-shutdown",
@@ -97,7 +97,9 @@ impl GracefulShutdown {
                 );
                 Err(TimeoutError.into())
             }
-        }
+        };
+
+        result
     }
 
     async fn wait_for_completion(&self) {
@@ -111,4 +113,3 @@ impl GracefulShutdown {
         }
     }
 }
-
