@@ -26,7 +26,6 @@ pub fn write_from_raw_response(
         }
     }
 
-    // Set Last-Updated-At header
     if let Some(last_updated) = last_updated_at::set_last_updated_at_value(updated_at) {
         if let (Ok(name), Ok(value)) = (
             HeaderName::try_from(last_updated_at::LAST_UPDATED_AT_KEY.as_bytes()),
@@ -36,12 +35,17 @@ pub fn write_from_raw_response(
         }
     }
 
+    header_map.insert(
+        HeaderName::from_static("content-length"),
+        HeaderValue::from_str(&body.len().to_string())
+            .unwrap_or_else(|_| HeaderValue::from_static("0")),
+    );
+
     // Build response
     let status = StatusCode::from_u16(code).unwrap_or(StatusCode::OK);
-    
+
     Response::builder()
         .status(status)
-        .header("content-length", body.len())
         .body(body.to_vec().into())
         .map(|mut resp| {
             *resp.headers_mut() = header_map;
@@ -56,18 +60,14 @@ pub fn write_from_raw_response(
 }
 
 /// Writes a response from a Response struct.
-pub fn write_from_response(
-    resp: &crate::model::Response,
-    last_refreshed_at: i64,
-) -> Response {
+pub fn write_from_response(resp: &crate::model::Response, last_refreshed_at: i64) -> Response {
     let mut header_map = HeaderMap::new();
 
     // Set headers
     for (k, v) in &resp.headers {
-        if let (Ok(name), Ok(value)) = (
-            HeaderName::try_from(k.as_bytes()),
-            HeaderValue::from_str(v),
-        ) {
+        if let (Ok(name), Ok(value)) =
+            (HeaderName::try_from(k.as_bytes()), HeaderValue::from_str(v))
+        {
             header_map.insert(name, value);
         }
     }
@@ -82,12 +82,17 @@ pub fn write_from_response(
         }
     }
 
+    header_map.insert(
+        HeaderName::from_static("content-length"),
+        HeaderValue::from_str(&resp.body.len().to_string())
+            .unwrap_or_else(|_| HeaderValue::from_static("0")),
+    );
+
     // Build response
     let status = StatusCode::from_u16(resp.status).unwrap_or(StatusCode::OK);
-    
+
     Response::builder()
         .status(status)
-        .header("content-length", resp.body.len())
         .body(resp.body.clone().into())
         .map(|mut resp| {
             *resp.headers_mut() = header_map;
@@ -102,9 +107,11 @@ pub fn write_from_response(
 }
 
 /// Writes a response from a cache entry.
-pub fn write_from_entry(entry: &Entry) -> Result<Response, Box<dyn std::error::Error + Send + Sync>> {
+pub fn write_from_entry(
+    entry: &Entry,
+) -> Result<Response, Box<dyn std::error::Error + Send + Sync>> {
     let resp_payload = entry.response_payload()?;
-    
+
     let headers: Vec<(Vec<u8>, Vec<u8>)> = resp_payload.headers;
     let body = resp_payload.body;
     let code = resp_payload.code;
@@ -112,4 +119,3 @@ pub fn write_from_entry(entry: &Entry) -> Result<Response, Box<dyn std::error::E
 
     Ok(write_from_raw_response(&headers, &body, code, fresh_at))
 }
-
