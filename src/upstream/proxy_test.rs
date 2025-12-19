@@ -38,7 +38,10 @@ mod tests {
             .get("host")
             .map(|v| v.to_str().unwrap_or(""))
             .unwrap_or("");
-        assert_eq!(got, "fallback.example:443", "should fallback to Host header");
+        assert_eq!(
+            got, "fallback.example:443",
+            "should fallback to Host header"
+        );
     }
 
     /// Test_proxyForwardedHost_FallbackToHost_WhenXFHAbsent
@@ -55,7 +58,10 @@ mod tests {
             .get("host")
             .map(|v| v.to_str().unwrap_or(""))
             .unwrap_or("");
-        assert_eq!(got, "[2001:db8::1]:8443", "should use Host header when XFH absent");
+        assert_eq!(
+            got, "[2001:db8::1]:8443",
+            "should use Host header when XFH absent"
+        );
     }
 
     /// Test_proxyForwardedHost_NoSources_NoPanic_NoChange
@@ -71,7 +77,10 @@ mod tests {
             .get("host")
             .map(|v| v.to_str().unwrap_or(""))
             .unwrap_or("");
-        assert_eq!(got, "pre.set", "out.Host should remain unchanged when no sources");
+        assert_eq!(
+            got, "pre.set",
+            "out.Host should remain unchanged when no sources"
+        );
     }
 
     /// Test_proxyForwardedHost_InternalCopy_NoAliasing
@@ -120,5 +129,64 @@ mod tests {
             "out.Host should keep pre.host (no sources -> no change)"
         );
     }
-}
 
+    /// Test: Prefers X-Forwarded-Host over Host when both are present.
+    #[test]
+    fn test_forwarded_host_value_bytes_prefers_xfh() {
+        let headers: Vec<(Vec<u8>, Vec<u8>)> = vec![
+            (b"Host".to_vec(), b"ignored.example.com".to_vec()),
+            (b"x-forwarded-host".to_vec(), b"forwarded.example.com:8080".to_vec()),
+            (b"Content-Type".to_vec(), b"application/json".to_vec()),
+        ];
+
+        let result = crate::upstream::proxy::forwarded_host_value_bytes(&headers);
+        assert_eq!(
+            result,
+            Some(b"forwarded.example.com:8080".as_slice()),
+            "Should prefer X-Forwarded-Host over Host"
+        );
+    }
+
+    /// Test: Falls back to Host when X-Forwarded-Host is absent.
+    #[test]
+    fn test_forwarded_host_value_bytes_fallback_to_host() {
+        let headers: Vec<(Vec<u8>, Vec<u8>)> = vec![
+            (b"Host".to_vec(), b"fallback.example.com:9090".to_vec()),
+            (b"Content-Type".to_vec(), b"application/json".to_vec()),
+        ];
+
+        let result = crate::upstream::proxy::forwarded_host_value_bytes(&headers);
+        assert_eq!(
+            result,
+            Some(b"fallback.example.com:9090".as_slice()),
+            "Should fallback to Host when X-Forwarded-Host absent"
+        );
+    }
+
+    /// Test: Returns None when both X-Forwarded-Host and Host are absent or empty.
+    #[test]
+    fn test_forwarded_host_value_bytes_no_change() {
+        // Test 1: No headers
+        let headers1: Vec<(Vec<u8>, Vec<u8>)> = vec![
+            (b"Content-Type".to_vec(), b"application/json".to_vec()),
+        ];
+        let result1 = crate::upstream::proxy::forwarded_host_value_bytes(&headers1);
+        assert_eq!(result1, None, "Should return None when no Host/XFH headers");
+
+        // Test 2: Empty XFH
+        let headers2: Vec<(Vec<u8>, Vec<u8>)> = vec![
+            (b"x-forwarded-host".to_vec(), b"".to_vec()),
+            (b"Content-Type".to_vec(), b"application/json".to_vec()),
+        ];
+        let result2 = crate::upstream::proxy::forwarded_host_value_bytes(&headers2);
+        assert_eq!(result2, None, "Should return None when XFH is empty");
+
+        // Test 3: Empty Host
+        let headers3: Vec<(Vec<u8>, Vec<u8>)> = vec![
+            (b"Host".to_vec(), b"".to_vec()),
+            (b"Content-Type".to_vec(), b"application/json".to_vec()),
+        ];
+        let result3 = crate::upstream::proxy::forwarded_host_value_bytes(&headers3);
+        assert_eq!(result3, None, "Should return None when Host is empty");
+    }
+}

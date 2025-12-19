@@ -1,10 +1,9 @@
-// Package upstream provides backend functionality.
+//! Upstream backend functionality.
 
 use anyhow::Result;
 use std::sync::atomic::{AtomicBool, Ordering};
-use tokio_util::sync::CancellationToken;
 
-use crate::config::{Rule};
+use crate::config::Rule;
 use crate::model::Entry;
 
 /// Policy for handling upstream requests.
@@ -60,12 +59,12 @@ pub fn change_policy(policy: Policy) -> Result<()> {
 #[async_trait::async_trait]
 pub trait Upstream: Send + Sync {
     /// Makes a request to the upstream backend.
+    /// original_headers: original request headers (for proxy_forwarded_host), can be same as headers if not filtered
     async fn request(
         &self,
         rule: &Rule,
         queries: &[(Vec<u8>, Vec<u8>)],
         headers: &[(Vec<u8>, Vec<u8>)],
-        trace_ctx: CancellationToken,
     ) -> Result<Response>;
 
     /// Proxies a request to the upstream backend.
@@ -76,11 +75,10 @@ pub trait Upstream: Send + Sync {
         query: &str,
         headers: &[(String, String)],
         body: Option<&[u8]>,
-        trace_ctx: CancellationToken,
     ) -> Result<Response>;
 
     /// Refreshes an entry by fetching new data from upstream.
-    async fn refresh(&self, entry: &mut Entry) -> Result<()>;
+    async fn refresh(&self, entry: &Entry) -> Result<()>;
 
     /// Checks if the upstream backend is healthy.
     async fn is_healthy(&self) -> Result<()>;
@@ -107,4 +105,3 @@ impl Response {
         self.status == 200
     }
 }
-

@@ -4,20 +4,18 @@ use std::num::NonZeroU32;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
+use tokio::sync::Semaphore;
 use tokio_util::sync::CancellationToken;
-use tokio::time::timeout;
 use tracing::{error, warn};
 
-use crate::config::{Backend, Traces, Rule};
+use super::{actual_policy, change_policy, Policy, Response, Upstream};
+use crate::config::{Backend, Rule};
 use crate::model::Entry;
-use super::{Policy, Response, Upstream, actual_policy, change_policy};
+use crate::upstream::trace as upstream_trace;
+use crate::upstream::proxy;
 
-#[allow(dead_code)]
-const HTTPS: &str = "https";
-#[allow(dead_code)]
-const LIMIT_BUCKETS: usize = 256;
+// Determines how fast will be the burst of requests within a second
 const BURST_PERCENT: u32 = 10;
-
 
 #[derive(Debug, thiserror::Error)]
 pub enum UpstreamError {
@@ -27,22 +25,29 @@ pub enum UpstreamError {
     BackendIsTooBusy,
     #[error("bad status code")]
     NotHealthyStatusCode,
-    #[error("invalid upstream status code")]
-    RefreshUpstreamBadStatusCode,
 }
 
 /// Backend implementation for upstream requests.
 pub struct BackendImpl {
-    #[allow(dead_code)]
-    id: Vec<u8>,
     shutdown_token: CancellationToken,
     cfg: Backend,
-    #[allow(dead_code)]
-    trace_cfg: Option<Traces>,
-    client: reqwest::Client,
-    await_rl: Arc<RateLimiter<governor::state::direct::NotKeyed, governor::state::InMemoryState, governor::clock::DefaultClock>>,
-    deny_rl: Arc<RateLimiter<governor::state::direct::NotKeyed, governor::state::InMemoryState, governor::clock::DefaultClock>>,
+    client: crate::http::client::HyperClient,
+    await_rl: Arc<
+        RateLimiter<
+            governor::state::direct::NotKeyed,
+            governor::state::InMemoryState,
+            governor::clock::DefaultClock,
+        >,
+    >,
+    deny_rl: Arc<
+        RateLimiter<
+            governor::state::direct::NotKeyed,
+            governor::state::InMemoryState,
+            governor::clock::DefaultClock,
+        >,
+    >,
     alive: Arc<AtomicBool>,
+    connection_semaphore: Arc<Semaphore>,
 }
 
 impl BackendImpl {
@@ -50,42 +55,37 @@ impl BackendImpl {
     pub fn new(
         shutdown_token: CancellationToken,
         cfg: Option<Backend>,
-        trace_cfg: Option<Traces>,
     ) -> Result<Arc<Self>> {
         let cfg = cfg.context("backend configuration is required")?;
-        
+
         let rate = cfg.rate.unwrap_or(15000) as u32;
         let burst = (rate / 100 * BURST_PERCENT).max(1);
-        
-        // Create rate limiters
+
         let await_quota = Quota::per_second(NonZeroU32::new(rate).unwrap());
         let await_rl = Arc::new(RateLimiter::direct(await_quota));
-        
+
         let deny_quota = Quota::per_second(NonZeroU32::new(rate).unwrap())
             .allow_burst(NonZeroU32::new(burst).unwrap());
         let deny_rl = Arc::new(RateLimiter::direct(deny_quota));
 
-        // Create HTTP client
-        let client = reqwest::Client::builder()
-            .timeout(cfg.timeout.unwrap_or(Duration::from_secs(10)))
-            .build()
-            .context("Failed to create HTTP client")?;
+        use crate::http::client::create_client;
+        let client = create_client();
 
-        let policy = Policy::from_str(cfg.policy.as_deref().unwrap_or("deny"))
-            .unwrap_or(Policy::Deny);
+        let max_concurrent_connections = cfg.concurrency.unwrap_or(4096);
+        let connection_semaphore = Arc::new(Semaphore::new(max_concurrent_connections));
+
+        let policy =
+            Policy::from_str(cfg.policy.as_deref().unwrap_or("deny")).unwrap_or(Policy::Deny);
         change_policy(policy)?;
 
         let backend = Arc::new(Self {
-            id: cfg.id_bytes.as_ref()
-                .map(|b| b.clone())
-                .unwrap_or_else(|| cfg.id.as_deref().unwrap_or("default").as_bytes().to_vec()),
             shutdown_token: shutdown_token.clone(),
             cfg,
-            trace_cfg,
             client,
             await_rl,
             deny_rl,
             alive: Arc::new(AtomicBool::new(true)),
+            connection_semaphore,
         });
 
         // Start health observer
@@ -104,19 +104,35 @@ impl BackendImpl {
             return;
         }
         if up {
-            warn!("clients pool is upped for upstream (to={})", 
-                self.cfg.host.as_deref().unwrap_or("unknown"));
+            warn!(
+                "clients pool is upped for upstream (to={})",
+                self.cfg.host.as_deref().unwrap_or("unknown")
+            );
         } else {
-            error!("clients pool is down for upstream (to={})", 
-                self.cfg.host.as_deref().unwrap_or("unknown"));
+            error!(
+                "clients pool is down for upstream (to={})",
+                self.cfg.host.as_deref().unwrap_or("unknown")
+            );
         }
     }
 
     /// Gets the base URL for the backend.
     fn base_url(&self) -> String {
         let scheme = self.cfg.scheme.as_deref().unwrap_or("http");
-        let host = self.cfg.host.as_deref().unwrap_or("localhost");
-        format!("{}://{}", scheme, host)
+        let host = self.cfg.host.as_deref()
+            .expect("backend.host must be configured");
+        
+        let normalized_host = if host == "localhost" || host.starts_with("localhost:") {
+            if host.contains(':') {
+                host.replace("localhost", "127.0.0.1")
+            } else {
+                "127.0.0.1".to_string()
+            }
+        } else {
+            host.to_string()
+        };
+        
+        format!("{}://{}", scheme, normalized_host)
     }
 
     /// Gets the timeout for requests.
@@ -131,8 +147,16 @@ impl BackendImpl {
     /// Throttles requests based on policy.
     async fn throttle(&self) -> Result<()> {
         if !self.alive.load(Ordering::Relaxed) {
+            let host = self.cfg.host.as_deref().unwrap_or("unknown");
+            tracing::warn!(
+                host = %host,
+                "Backend is marked as down, rejecting request"
+            );
             return Err(UpstreamError::BackendIsDown.into());
         }
+
+        let _permit = self.connection_semaphore.acquire().await
+            .map_err(|_| anyhow::anyhow!("Connection semaphore closed"))?;
 
         match actual_policy() {
             Policy::Await => {
@@ -159,101 +183,95 @@ impl Upstream for BackendImpl {
         rule: &Rule,
         queries: &[(Vec<u8>, Vec<u8>)],
         headers: &[(Vec<u8>, Vec<u8>)],
-        _trace_ctx: CancellationToken,
     ) -> Result<Response> {
         self.throttle().await?;
 
         let base_url = self.base_url();
         let path = rule.path.as_deref().unwrap_or("/");
-        let mut url = format!("{}{}", base_url, path);
-
-        // Build query string
-        if !queries.is_empty() {
-            let query_parts: Vec<String> = queries
-                .iter()
-                .map(|(k, v)| {
-                    format!("{}={}", 
-                        String::from_utf8_lossy(k),
-                        urlencoding::encode(&String::from_utf8_lossy(v)))
-                })
-                .collect();
-            url = format!("{}?{}", url, query_parts.join("&"));
-        }
-
-        // Build headers map for sanitization
-        let mut header_map = axum::http::HeaderMap::new();
-        for (key, value) in headers {
-            if let (Ok(k), Ok(v)) = (
-                axum::http::HeaderName::try_from(key.as_slice()),
-                axum::http::HeaderValue::from_bytes(value),
-            ) {
-                header_map.insert(k, v);
-            }
-        }
-
-        // Sanitize hop-by-hop headers from request
-        crate::upstream::sanitize::sanitize_hop_by_hop_request_headers(&mut header_map);
-
-        // Note: proxy_forwarded_host is not needed here as this is for cache request method
-        // which doesn't use X-Forwarded-Host from original client request
-
-        // Build request
-        let mut request = self.client.get(&url);
-
-        // Add sanitized headers
-        for (key, value) in header_map.iter() {
-            if let Ok(value_str) = value.to_str() {
-                request = request.header(key.as_str(), value_str);
-            }
-        }
-
-        // Execute request
-        let timeout_duration = self.get_timeout(false);
-        let response = timeout(timeout_duration, request.send())
-            .await
-            .context("Request timeout")?
-            .context("Request failed")?;
-
-        let status = response.status().as_u16();
-        
-        // Sanitize response headers
-        let mut response_headers_map = axum::http::HeaderMap::new();
-        for (key, value) in response.headers() {
-            if let Ok(value_str) = value.to_str() {
-                if let (Ok(name), Ok(val)) = (
-                    axum::http::HeaderName::try_from(key.as_str().as_bytes()),
-                    axum::http::HeaderValue::from_str(value_str),
-                ) {
-                    response_headers_map.insert(name, val);
+        let url = if queries.is_empty() {
+            format!("{}{}", base_url, path)
+        } else {
+            // Build query string with single allocation
+            let mut url_with_query = String::with_capacity(base_url.len() + path.len() + queries.len() * 32);
+            url_with_query.push_str(&base_url);
+            url_with_query.push_str(path);
+            url_with_query.push('?');
+            
+            // Build query string (encodes both key and value)
+            for (i, (k, v)) in queries.iter().enumerate() {
+                if i > 0 {
+                    url_with_query.push('&');
                 }
+                url_with_query.push_str(&urlencoding::encode(&String::from_utf8_lossy(k)));
+                url_with_query.push('=');
+                url_with_query.push_str(&urlencoding::encode(&String::from_utf8_lossy(v)));
             }
-        }
-        crate::upstream::sanitize::sanitize_hop_by_hop_response_headers(&mut response_headers_map);
+            url_with_query
+        };
+
+        // Parse URL to Uri
+        let uri: hyper::Uri = url.parse()
+            .with_context(|| format!("Invalid URL: {}", url))?;
+
+        // Extract forwarded host value (X-Forwarded-Host or Host) as bytes (no allocations)
+        let forwarded_host = proxy::forwarded_host_value_bytes(headers);
+
+        let request_str = format!("GET {}", url);
+
+        let span = upstream_trace::start_request_span(rule, &request_str);
+
+        // Filter hop-by-hop headers (Host is handled separately via forwarded_host)
+        let filtered_headers = proxy::filter_hop_by_hop_headers_bytes(headers);
         
-        // Convert sanitized headers to Vec
-        let mut response_headers = Vec::new();
-        for (key, value) in response_headers_map.iter() {
-            if let Ok(value_str) = value.to_str() {
-                response_headers.push((key.to_string(), value_str.to_string()));
+        // Convert filtered headers to String tuples (excluding Host - it's set after build())
+        let mut request_headers: Vec<(String, String)> = Vec::new();
+        for (key, value) in &filtered_headers {
+            // Skip Host header - it will be set via forwarded_host after build()
+            if key.eq_ignore_ascii_case(b"host") {
+                continue;
             }
+            let k = match String::from_utf8(key.clone()) {
+                Ok(s) => s,
+                Err(_) => continue,
+            };
+            let v = match String::from_utf8(value.clone()) {
+                Ok(s) => s,
+                Err(_) => continue,
+            };
+            request_headers.push((k, v));
         }
-
-        // Apply rule-based sanitization
-        crate::upstream::sanitize::sanitize_response_headers_by_rule(Some(rule), &mut response_headers_map);
         
-        // Rebuild response_headers after rule sanitization
-        response_headers.clear();
-        for (key, value) in response_headers_map.iter() {
-            if let Ok(value_str) = value.to_str() {
-                response_headers.push((key.to_string(), value_str.to_string()));
+        let request_headers_refs: Vec<(&str, &str)> = request_headers
+            .iter()
+            .map(|(k, v)| (k.as_str(), v.as_str()))
+            .collect();
+
+        let timeout_duration = self.get_timeout(false);
+        
+        use crate::upstream::backend_hyper_impl::make_get_request;
+        use crate::upstream::backend_headers::process_response_headers;
+        match make_get_request(&self.client, uri, request_headers_refs, timeout_duration, forwarded_host).await {
+            Ok((status, response_headers_map, body)) => {
+                // Process headers directly from response (optimized)
+                let response_headers = process_response_headers(&response_headers_map, Some(rule));
+                
+                let response_size = body.len();
+                
+                // Record response in span
+                if let Some(ref span) = span {
+                    upstream_trace::record_response_in_span(span, status, response_size);
+                }
+
+                Ok(Response::new(status, response_headers, body))
+            }
+            Err(e) => {
+                // Record error in span
+                if let Some(ref span) = span {
+                    upstream_trace::record_error_in_span(span, e.as_ref());
+                }
+                Err(e).context("Request failed")
             }
         }
-
-        let body = response.bytes().await
-            .context("Failed to read response body")?
-            .to_vec();
-
-        Ok(Response::new(status, response_headers, body))
     }
 
     async fn proxy_request(
@@ -263,7 +281,6 @@ impl Upstream for BackendImpl {
         query: &str,
         headers: &[(String, String)],
         body: Option<&[u8]>,
-        _trace_ctx: CancellationToken,
     ) -> Result<Response> {
         self.throttle().await?;
 
@@ -273,138 +290,143 @@ impl Upstream for BackendImpl {
             url = format!("{}?{}", url, query);
         }
 
-        // Build source headers map from input headers (for proxy_forwarded_host)
-        let mut src_header_map = axum::http::HeaderMap::new();
-        for (key, value) in headers {
-            if let (Ok(name), Ok(val)) = (
-                axum::http::HeaderName::try_from(key.as_bytes()),
-                axum::http::HeaderValue::from_str(value),
-            ) {
-                src_header_map.insert(name, val);
-            }
-        }
+        // Parse URL to Uri
+        let uri: hyper::Uri = url.parse()
+            .with_context(|| format!("Invalid URL: {}", url))?;
 
-        // Build destination headers map for outgoing request
-        let mut header_map = src_header_map.clone();
+        // Build request string for tracing
+        let request_str = format!("{} {}", method, url);
 
-        // Apply proxy_forwarded_host - sets Host header from X-Forwarded-Host or Host in source
-        crate::upstream::proxy::proxy_forwarded_host(&mut header_map, &src_header_map);
-
-        // Sanitize hop-by-hop headers from request
-        crate::upstream::sanitize::sanitize_hop_by_hop_request_headers(&mut header_map);
-
-        // Build request based on method
-        let mut request = match method {
-            "GET" => self.client.get(&url),
-            "POST" => self.client.post(&url),
-            "PUT" => self.client.put(&url),
-            "DELETE" => self.client.delete(&url),
-            _ => self.client.get(&url),
+        // Parse HTTP method
+        let http_method = match method {
+            "GET" => hyper::Method::GET,
+            "POST" => hyper::Method::POST,
+            "PUT" => hyper::Method::PUT,
+            "DELETE" => hyper::Method::DELETE,
+            _ => hyper::Method::GET,
         };
 
-        // Add sanitized headers
-        for (key, value) in header_map.iter() {
-            if let Ok(value_str) = value.to_str() {
-                request = request.header(key.as_str(), value_str);
+        // Convert headers to bytes format for forwarded_host_value_bytes
+        let headers_bytes: Vec<(Vec<u8>, Vec<u8>)> = headers
+            .iter()
+            .map(|(k, v)| (k.as_bytes().to_vec(), v.as_bytes().to_vec()))
+            .collect();
+        
+        // Extract forwarded host value (X-Forwarded-Host or Host) as bytes (no allocations)
+        let forwarded_host = proxy::forwarded_host_value_bytes(&headers_bytes);
+
+        // Sanitize hop-by-hop headers from request
+        let filtered_headers = proxy::filter_hop_by_hop_headers(headers);
+
+        // Start upstream span (after proxyForwardedHost)
+        let span = upstream_trace::start_proxy_request_span(path, &request_str);
+
+        // Build request headers (excluding Host - it's set after build())
+        let mut request_headers: Vec<(&str, &str)> = Vec::new();
+        for (key, value) in &filtered_headers {
+            // Skip Host header - it will be set via forwarded_host after build()
+            if key.eq_ignore_ascii_case("host") {
+                continue;
             }
+            request_headers.push((key.as_str(), value.as_str()));
         }
 
-        // Add body if present
-        if let Some(body_data) = body {
-            request = request.body(body_data.to_vec());
-        }
+        // Convert body to Bytes if present
+        let body_bytes = body.map(|b| hyper::body::Bytes::from(b.to_vec()));
 
-        // Execute request
         let timeout_duration = self.get_timeout(false);
-        let response = timeout(timeout_duration, request.send())
-            .await
-            .context("Request timeout")?
-            .context("Request failed")?;
-
-        let status = response.status().as_u16();
         
-        // Sanitize response headers
-        let mut response_headers_map = axum::http::HeaderMap::new();
-        for (key, value) in response.headers() {
-            if let Ok(value_str) = value.to_str() {
-                if let (Ok(name), Ok(val)) = (
-                    axum::http::HeaderName::try_from(key.as_str().as_bytes()),
-                    axum::http::HeaderValue::from_str(value_str),
-                ) {
-                    response_headers_map.insert(name, val);
+        use crate::upstream::backend_hyper_impl::make_method_request;
+        match make_method_request(&self.client, http_method, uri, request_headers, body_bytes, timeout_duration, forwarded_host).await {
+            Ok((status, response_headers_map, body_bytes)) => {
+                // Process headers directly from response (optimized)
+                use crate::upstream::backend_headers::process_response_headers;
+                let response_headers = process_response_headers(&response_headers_map, None);
+                
+                let response_size = body_bytes.len();
+                
+                // Record response in span
+                if let Some(ref span) = span {
+                    upstream_trace::record_response_in_span(span, status, response_size);
                 }
+
+                Ok(Response::new(status, response_headers, body_bytes))
+            }
+            Err(e) => {
+                // Record error in span
+                if let Some(ref span) = span {
+                    upstream_trace::record_error_in_span(span, e.as_ref());
+                }
+                Err(e).context("Request failed")
             }
         }
-        crate::upstream::sanitize::sanitize_hop_by_hop_response_headers(&mut response_headers_map);
-        
-        // Convert sanitized headers to Vec
-        let mut response_headers = Vec::new();
-        for (key, value) in response_headers_map.iter() {
-            if let Ok(value_str) = value.to_str() {
-                response_headers.push((key.to_string(), value_str.to_string()));
-            }
-        }
-
-        let body = response.bytes().await
-            .context("Failed to read response body")?
-            .to_vec();
-
-        Ok(Response::new(status, response_headers, body))
     }
 
-    async fn refresh(&self, entry: &mut Entry) -> Result<()> {
-        use crate::upstream::trace;
-
-        // Decode request payload from entry
-        let request_payload = entry.request_payload()
-            .context("failed to decode request payload for refresh")?;
-
-        let queries = &request_payload.queries;
-        let headers = &request_payload.headers;
-
-        // Start tracing span
-        let span = trace::start_refresh_span_context(entry);
-        let _guard = span.enter();
-
-        // Make request to upstream
-        let rule = entry.rule.clone();
-        let trace_ctx = CancellationToken::new();
-        let resp = self.request(
-            &rule,
-            queries,
-            headers,
-            trace_ctx,
-        ).await.map_err(|e| {
-            trace::record_error_in_span(&span, e.as_ref());
-            e
-        }).context("failed to fetch new payload while refreshing")?;
-
-        // Check status code
-        if resp.status != 200 {
-            return Err(UpstreamError::RefreshUpstreamBadStatusCode.into());
+    async fn refresh(&self, entry: &Entry) -> Result<()> {
+        use crate::dedlog;
+        
+        // Get request payload from entry
+        let req_payload = entry.request_payload()
+            .context("Failed to decode payload")?;
+        
+        let queries = &req_payload.queries;
+        let headers = &req_payload.headers;
+        
+        // Start refresh span
+        let span = upstream_trace::start_refresh_span_context(entry);
+        
+        let rule = entry.rule();
+        let upstream_resp = match self.request(rule, queries, headers).await {
+            Ok(r) => r,
+            Err(e) => {
+                // Record error in span
+                if let Some(ref span) = span {
+                    upstream_trace::record_error_in_span(span, e.as_ref());
+                }
+                let request_str = format!("GET {}", rule.path.as_deref().unwrap_or("/"));
+                dedlog::err(Some(e.as_ref()), Some(&request_str), "failed to fetch new payload while refreshing");
+                return Err(e);
+            }
+        };
+        
+        // Validate response status
+        if upstream_resp.status != 200 {
+            return Err(anyhow::anyhow!("invalid upstream status code: {}", upstream_resp.status));
         }
-
-        // Update entry payload and timestamps
-        entry.set_payload(queries, headers, &resp);
+        
+        use crate::model::Response as ModelResponse;
+        let model_resp = ModelResponse {
+            status: upstream_resp.status,
+            headers: upstream_resp.headers,
+            body: upstream_resp.body,
+        };
+        
+        entry.set_payload(queries, headers, &model_resp);
+        
+        // Update timestamps
         entry.touch_refreshed_at();
         entry.clear_refresh_queued();
-
+        
         Ok(())
     }
 
     async fn is_healthy(&self) -> Result<()> {
-        let healthcheck_path = self.cfg.healthcheck.as_deref()
-            .unwrap_or("/healthcheck");
+        let healthcheck_path = self.cfg.healthcheck.as_deref().unwrap_or("/healthz");
         let base_url = self.base_url();
         let url = format!("{}{}", base_url, healthcheck_path);
+        
+        let uri: hyper::Uri = url.parse()
+            .with_context(|| format!("Invalid health check URL: {}", url))?;
 
         let timeout_duration = self.cfg.timeout.unwrap_or(Duration::from_secs(10));
-        let response = timeout(timeout_duration, self.client.get(&url).send())
+        
+        use crate::upstream::backend_hyper_impl::make_get_request;
+        let (status, _, _) = make_get_request(&self.client, uri, Vec::new(), timeout_duration, None)
             .await
-            .context("Health check timeout")?
-            .context("Health check failed")?;
+            .with_context(|| format!("Health check failed for URL: {}", url))?;
 
-        if response.status().as_u16() != 200 {
+
+        if status != 200 {
             return Err(UpstreamError::NotHealthyStatusCode.into());
         }
 
@@ -470,4 +492,3 @@ impl BackendImpl {
         }
     }
 }
-

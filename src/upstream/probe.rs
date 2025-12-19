@@ -1,9 +1,10 @@
-// Package upstream provides health probe functionality.
+//! Health probe functionality.
+//
 
 use std::sync::Arc;
 use std::time::Duration;
-use tokio_util::sync::CancellationToken;
 use tokio::time::interval;
+use tokio_util::sync::CancellationToken;
 
 /// Health probe configuration constants.
 #[allow(dead_code)]
@@ -69,4 +70,3 @@ pub async fn observer<F>(
         }
     }
 }
-
