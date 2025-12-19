@@ -1,10 +1,7 @@
 // Integration tests for administrative API endpoints.
 
-#[path = "support/mod.rs"]
-mod support;
-
 use std::collections::HashMap;
-use crate::support::{assert_equal, assert_ok, cache_addr, do_json, init_test_harness, H};
+use crate::tests::support::{assert_equal, assert_ok, cache_addr, do_json, init_test_harness, H};
 
 #[derive(serde::Deserialize)]
 struct AdmissionResponse {

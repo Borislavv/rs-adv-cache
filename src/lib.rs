@@ -13,11 +13,10 @@ pub mod sort;
 #[path = "shared/time/mod.rs"]
 pub mod time;
 #[cfg(test)]
-#[path = "../src/tests/support/mod.rs"]
-pub mod support;
+mod tests;
+
 #[cfg(test)]
-#[path = "../src/tests/e2e.rs"]
-mod e2e;
+pub use tests::support;
 
 
 pub mod app;

@@ -1,7 +1,5 @@
 // Integration tests for error handling and edge cases.
 
-#[path = "support/mod.rs"]
-mod support;
 
 use std::collections::HashMap;
 use crate::support::{assert_equal, assert_ok, cache_addr, do_json, init_test_harness, new_namespace, with_ns, H};
