@@ -1,4 +1,5 @@
-// Package http provides HTTP server implementation.
+//! HTTP server implementation.
+//
 
 use anyhow::{Context, Result};
 use axum::Router;
@@ -48,12 +49,11 @@ impl HttpServer {
 
     /// Starts the HTTP server (async version).
     pub async fn listen_and_serve(&self) -> Result<()> {
-        let api_cfg = self.config.api()
-            .context("API configuration is required")?;
-        
+        let api_cfg = self.config.api().context("API configuration is required")?;
+
         let name = api_cfg.name.as_deref().unwrap_or("advcache");
         let port = api_cfg.port.as_deref().unwrap_or("8020");
-        
+
         // Ensure port starts with ':'
         let port = if port.starts_with(':') {
             port.to_string()
@@ -80,13 +80,13 @@ impl HttpServer {
 
         // Create shutdown signal
         let shutdown_token = self.shutdown_token.clone();
-        
+
         // Start server with graceful shutdown
-        let serve_future = axum::serve(listener, self.router.clone())
-            .with_graceful_shutdown(async move {
+        let serve_future =
+            axum::serve(listener, self.router.clone()).with_graceful_shutdown(async move {
                 shutdown_token.cancelled().await;
             });
-        
+
         // Run server
         if let Err(e) = serve_future.await {
             error!(
@@ -114,30 +114,27 @@ impl HttpServer {
     /// Builds the router with all controllers.
     fn build_router(controllers: Vec<Box<dyn Controller>>) -> Router {
         let mut router = Router::new();
-        
+
         // Add routes from all controllers
         for controller in controllers {
             router = controller.add_route(router);
         }
-        
+
         router
     }
 
     /// Merges middlewares into the router.
-    fn merge_middlewares(
-        router: Router,
-        middlewares: Vec<Box<dyn Middleware>>,
-    ) -> Router {
+    fn merge_middlewares(router: Router, middlewares: Vec<Box<dyn Middleware>>) -> Router {
         let mut result = router;
-        
+
         // Apply middlewares in reverse order (last middleware wraps first)
         for middleware in middlewares.iter().rev() {
             result = middleware.apply(result);
         }
-        
+
         // Add timeout layer
         result = result.layer(TimeoutLayer::new(Duration::from_secs(30)));
-        
+
         result
     }
 }
@@ -156,4 +153,3 @@ impl Server for Arc<HttpServer> {
         HttpServer::listen_and_serve(self).await
     }
 }
-
