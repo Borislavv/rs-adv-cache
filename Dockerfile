@@ -25,7 +25,7 @@ COPY . .
 RUN cargo build --locked --release
 
 
-### Runtime stage: small, non-root image
+### Runtime stage
 FROM debian:bookworm-slim AS runtime
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -38,7 +38,6 @@ USER appuser
 
 COPY --from=builder /app/target/release/advcache /usr/local/bin/advcache
 
-# Adjust if your service listens on a different port
 EXPOSE 8080
 
 ENV RUST_LOG=info
