@@ -1,5 +1,5 @@
-use crate::upstream::Policy as UpstreamPolicy;
 use super::policy::Policy;
+use crate::upstream::Policy as UpstreamPolicy;
 
 // Metric name constants
 pub const AVG_TOTAL_DURATION: &str = "avg_duration_ns";
@@ -40,6 +40,7 @@ pub const IS_BYPASS_ACTIVE: &str = "is_bypass_active";
 pub const IS_COMPRESSION_ACTIVE: &str = "is_compression_active";
 pub const IS_TRACES_ACTIVE: &str = "is_traces_active";
 pub const IS_ADMISSION_ACTIVE: &str = "is_admission_active";
+
 
 /// Adds cache hits.
 pub fn add_hits(value: u64) {
@@ -130,6 +131,7 @@ pub fn set_avg_response_time(total_dur: f64, cache_dur: f64, proxy_dur: f64, err
     metrics::gauge!(AVG_ERROR_DURATION, err_dur);
 }
 
+
 /// Adds soft eviction statistics.
 pub fn add_soft_eviction_stat_counters(bytes: i64, items: i64, scans: i64) {
     metrics::counter!(TOTAL_SOFT_EVICTIONS, items as u64);
@@ -138,7 +140,12 @@ pub fn add_soft_eviction_stat_counters(bytes: i64, items: i64, scans: i64) {
 }
 
 /// Adds hard eviction statistics.
-pub fn add_hard_eviction_stat_counters(bytes: i64, items: i64, adm_allowed: i64, adm_not_allowed: i64) {
+pub fn add_hard_eviction_stat_counters(
+    bytes: i64,
+    items: i64,
+    adm_allowed: i64,
+    adm_not_allowed: i64,
+) {
     metrics::counter!(TOTAL_HARD_EVICTIONS, items as u64);
     metrics::counter!(TOTAL_HARD_BYTES_EVICTED, bytes as u64);
     metrics::counter!(TOTAL_ADM_ALLOWED, adm_allowed as u64);
@@ -153,4 +160,3 @@ pub fn add_lifetime_stat_counters(updated: i64, errors: i64, scans: i64, miss: i
     metrics::counter!(REFRESHER_HITS, hits as u64);
     metrics::counter!(REFRESHER_MISS, miss as u64);
 }
-

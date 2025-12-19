@@ -1,4 +1,5 @@
-// Package metrics provides policy types for metrics.
+//! Policy types for metrics.
+//
 
 /// Policy represents a lifetime policy.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -33,4 +34,3 @@ impl From<Policy> for u64 {
         policy.to_u64()
     }
 }
-
