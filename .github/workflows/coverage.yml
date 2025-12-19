@@ -1,5 +1,4 @@
 name: test & coverage
-
 on:
   push:
   pull_request:
@@ -9,32 +8,42 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      id-token: write
-
+      id-token: write   # needed for codecov-action@v4 (OIDC)
     steps:
       - uses: actions/checkout@v4
 
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
+      # Install Rust toolchain (stable)
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
 
-      - name: Cache cargo
-        uses: actions/cache@v4
+      # Install cargo-llvm-cov for coverage
+      - uses: taiki-e/install-action@cargo-llvm-cov
+
+      # Cache cargo dependencies for faster builds
+      - uses: actions/cache@v4
         with:
           path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: ${{ runner.os }}-cargo-
+          restore-keys: |
+            ${{ runner.os }}-cargo-
 
-      - name: Install cargo-llvm-cov
-        run: cargo install cargo-llvm-cov
-
+      # Run tests with coverage (including unit, integration, and e2e tests)
+      # --workspace includes all packages in the workspace
+      # --tests runs all test targets (unit tests, integration tests, e2e tests)
+      # --lcov generates lcov.info format for codecov
       - name: Run tests with coverage
-        run: cargo llvm-cov --all-features --workspace --lcov --output-path lcov.info
+        run: |
+          cargo llvm-cov --all-features --workspace --tests --lcov --output-path lcov.info
 
-      - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@v4
+      # Upload coverage report to Codecov
+      # For public repos, token is not required (uses OIDC)
+      - uses: codecov/codecov-action@v4
         with:
           files: lcov.info
           fail_ci_if_error: true
