@@ -255,6 +255,7 @@ impl Upstream for BackendImpl {
                 // Process headers directly from response (optimized)
                 let response_headers = process_response_headers(&response_headers_map, Some(rule));
                 
+                let body: Vec<u8> = body;
                 let response_size: usize = body.len();
                 
                 // Record response in span
