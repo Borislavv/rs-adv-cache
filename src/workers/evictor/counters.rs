@@ -1,4 +1,5 @@
-// Package evictor provides counters for eviction statistics.
+//! Counters for eviction statistics.
+//
 
 use std::sync::atomic::AtomicI64;
 use std::sync::Arc;
@@ -26,4 +27,3 @@ impl Default for Counters {
         Self::new()
     }
 }
-

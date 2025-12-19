@@ -1,10 +1,11 @@
-// Package evictor provides eviction worker functionality.
+//! Eviction worker functionality.
 
 use anyhow::Result;
 use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use std::sync::Arc;
+use std::sync::OnceLock;
 use std::time::Duration;
-use tokio::sync::broadcast;
+use tokio::sync::{broadcast, RwLock};
 use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 
@@ -15,21 +16,20 @@ use super::counters;
 
 use counters::Counters;
 
-/// Group is a scalable worker set.
+/// Scalable worker group for cache eviction.
 pub struct Evictor {
-    shutdown_token: CancellationToken,
-    cfg: Arc<tokio::sync::RwLock<Arc<dyn Config>>>,
-    
-    workers_ctx: Arc<tokio::sync::RwLock<CancellationToken>>,
+    shutdown_ctx: CancellationToken,
+    cfg: Arc<RwLock<Arc<dyn Config>>>,
+    workers_ctx: Arc<RwLock<CancellationToken>>,
     workers_active: Arc<AtomicI64>,
     workers_kill_tx: broadcast::Sender<()>,
     workers_tasks_tx: broadcast::Sender<()>,
-    
+
     inited: Arc<AtomicBool>,
     name: String,
     counters: Arc<Counters>,
     backend: Arc<dyn EvictionBackend>,
-    transport: Arc<tokio::sync::Mutex<Option<Arc<dyn Transport>>>>,
+    transport: OnceLock<Arc<dyn Transport>>,
 }
 
 impl Evictor {
@@ -40,16 +40,16 @@ impl Evictor {
         cfg: Arc<dyn Config>,
         backend: Arc<dyn EvictionBackend>,
     ) -> Result<Arc<Self>> {
-        let workers_ctx = Arc::new(tokio::sync::RwLock::new(CancellationToken::new()));
-        
+        let workers_ctx = CancellationToken::new();
+
         // Use broadcast channels for both kill signals and tasks (one-to-many)
         let (workers_kill_tx, _) = broadcast::channel(1);
         let (workers_tasks_tx, _) = broadcast::channel(num_cpus::get() * 4);
 
         let evictor = Arc::new(Self {
-            shutdown_token: ctx,
-            cfg: Arc::new(tokio::sync::RwLock::new(cfg)),
-            workers_ctx,
+            shutdown_ctx: ctx,
+            cfg: Arc::new(RwLock::new(cfg)),
+            workers_ctx: Arc::new(RwLock::new(workers_ctx)),
             workers_active: Arc::new(AtomicI64::new(0)),
             workers_kill_tx,
             workers_tasks_tx,
@@ -57,7 +57,7 @@ impl Evictor {
             name,
             counters: Arc::new(Counters::new()),
             backend,
-            transport: Arc::new(tokio::sync::Mutex::new(None)),
+            transport: OnceLock::new(),
         });
 
         Ok(evictor)
@@ -70,48 +70,56 @@ impl Evictor {
 
     /// Main loop that handles transport signals.
     async fn loop_handler(self: Arc<Self>, transport: Arc<dyn Transport>) {
-        if !self.inited.compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed).is_ok() {
+        if !self
+            .inited
+            .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
+            .is_ok()
+        {
             return;
         }
 
-        *self.transport.lock().await = Some(transport.clone());
+        let _ = self.transport.get_or_init(|| transport.clone());
 
         // Start soft eviction logger
         let logger_self = self.clone();
         tokio::task::spawn(async move {
-            logger_self.soft_eviction_logger(Duration::from_secs(5)).await;
+            logger_self
+                .soft_eviction_logger(Duration::from_secs(5))
+                .await;
         });
 
-        // Main event loop that handles transport signals
         loop {
             tokio::select! {
-                _ = self.shutdown_token.cancelled() => {
+                _ = self.shutdown_ctx.cancelled() => {
                     return;
                 }
                 _ = transport.on_start() => {
-                    if let Err(e) = self.reload(None, "starting").await {
-                        tracing::error!(name = %self.name, error = %e, "start up failed");
+                    if let Err(err) = self.reload(None, "starting").await {
+                        tracing::error!(name = %self.name, error = %err, "start up failed");
                     }
                 }
                 _ = transport.on_on() => {
-                    if let Err(e) = self.on().await {
-                        tracing::error!(name = %self.name, error = %e, "turning on failed");
+                    if let Err(err) = self.on().await {
+                        tracing::error!(name = %self.name, error = %err, "turning on failed");
                     }
                 }
                 _ = transport.on_off() => {
-                    if let Err(e) = self.off().await {
-                        tracing::error!(name = %self.name, error = %e, "turning off failed");
+                    if let Err(err) = self.off().await {
+                        tracing::error!(name = %self.name, error = %err, "turning off failed");
                     }
                 }
                 replicas = transport.on_scale_to() => {
-                    if let Err(e) = self.scale(replicas).await {
-                        tracing::error!(name = %self.name, error = %e, "scaling failed");
+                    if let Err(err) = self.scale(replicas).await {
+                        tracing::error!(name = %self.name, error = %err, "scaling failed");
                     }
                 }
                 cfg = transport.on_reload() => {
-                    if let Err(e) = self.reload(Some(cfg), "reloading").await {
-                        tracing::error!(name = %self.name, error = %e, "reloading failed");
+                    if let Err(err) = self.reload(Some(cfg), "reloading").await {
+                        tracing::error!(name = %self.name, error = %err, "reloading failed");
                     }
+                }
+                _ = transport.on_stop() => {
+                    return;
                 }
             }
         }
@@ -149,7 +157,7 @@ impl Evictor {
 
     /// Reloads the evictor with new configuration.
     async fn reload(&self, cfg: Option<Arc<dyn Config>>, action: &str) -> Result<()> {
-        info!(name = %self.name, where = "reloading", "{}...", action);
+        info!(name = %self.name, where = "reloading", action = action, "reloading...");
 
         let active = self.workers_active.load(Ordering::Relaxed);
         if active > 0 {
@@ -159,23 +167,26 @@ impl Evictor {
 
         // Cancel and recreate workers context
         {
-            let mut w_ctx = self.workers_ctx.write().await;
-            w_ctx.cancel();
-            *w_ctx = CancellationToken::new();
+            let mut ctx_guard = self.workers_ctx.write().await;
+            ctx_guard.cancel();
+            *ctx_guard = CancellationToken::new();
         }
-        
+
         if let Some(new_cfg) = cfg {
             *self.cfg.write().await = new_cfg;
             info!(name = %self.name, where = "reloading", "new config was applied");
         }
 
-        self.run_eviction_tasks_provider().await;
         let need_replicas = self.config().await.get_replicas();
         if need_replicas > 0 {
             info!(name = %self.name, where = "reloading", need_replicas, "upscaling to replicas");
             self.scale_to(need_replicas).await;
             info!(name = %self.name, where = "scaling", "scaled");
         }
+        // Start tasks provider AFTER workers are created, so they can subscribe to broadcast channel
+        // Start tasks provider AFTER workers are created, so they can subscribe to broadcast channel
+        // loses messages sent before subscription
+        self.run_eviction_tasks_provider().await;
 
         Ok(())
     }
@@ -200,8 +211,8 @@ impl Evictor {
         let to = n as i64;
         if to == 0 {
             {
-                let w_ctx = self.workers_ctx.read().await;
-                w_ctx.cancel();
+                let ctx = self.workers_ctx.write().await;
+                ctx.cancel();
             }
             // Wait for all workers to finish
             while self.workers_active.load(Ordering::Relaxed) > 0 {
@@ -213,11 +224,17 @@ impl Evictor {
         let actual = self.workers_active.load(Ordering::Relaxed);
 
         if to > actual {
+            let ctx_clone = {
+                let mut guard = self.workers_ctx.write().await;
+                if guard.is_cancelled() {
+                    *guard = CancellationToken::new();
+                }
+                guard.clone()
+            };
             let diff = to - actual;
             let cfg = self.config().await;
-            let w_ctx = self.workers_ctx.read().await.clone();
             for _ in 0..diff {
-                self.up_one(w_ctx.clone(), cfg.clone()).await;
+                self.up_one(ctx_clone.clone(), cfg.clone()).await;
             }
         } else if to < actual {
             let diff = actual - to;
@@ -244,20 +261,20 @@ impl Evictor {
         let counters = self.counters.clone();
         let workers_active = self.workers_active.clone();
         let cfg_clone = cfg.clone();
-        
+
         // Create receivers for this worker
         // Use broadcast receivers for both kill signals and tasks (subscribes to shared broadcast channels)
         let mut workers_kill_rx = self.workers_kill_tx.subscribe();
         let mut workers_tasks_rx = self.workers_tasks_tx.subscribe();
 
         workers_active.fetch_add(1, Ordering::Relaxed);
-        
+
         let ctx_clone = ctx.clone();
         let worker_name = self_clone.name.clone();
         tokio::task::spawn(async move {
             let tick_freq = cfg_clone.get_freq().get_tick_freq();
             info!(name = %worker_name, tick_freq = ?tick_freq, "worker upped");
-            
+
             let _guard = {
                 struct Guard {
                     workers_active: Arc<AtomicI64>,
@@ -283,12 +300,19 @@ impl Evictor {
                     _ = workers_kill_rx.recv() => {
                         return;
                     }
-                    _ = workers_tasks_rx.recv() => {
-                        const SPINS_BACKOFF: i64 = 8196;
-                        let (freed_bytes, items) = backend.soft_evict_until_within_limit(SPINS_BACKOFF);
-                        if items > 0 || freed_bytes > 0 {
-                            counters.evicted_items.fetch_add(items, Ordering::Relaxed);
-                            counters.evicted_bytes.fetch_add(freed_bytes, Ordering::Relaxed);
+                    msg = workers_tasks_rx.recv() => {
+                        match msg {
+                            Ok(_) => {
+                                const SPINS_BACKOFF: i64 = 8196;
+                                let (freed_bytes, items) = backend.soft_evict_until_within_limit(SPINS_BACKOFF);
+                                if items > 0 || freed_bytes > 0 {
+                                    counters.evicted_items.fetch_add(items, Ordering::Relaxed);
+                                    counters.evicted_bytes.fetch_add(freed_bytes, Ordering::Relaxed);
+                                }
+                            }
+                            Err(_e) => {
+                                // Broadcast channel closed or lagged, ignore
+                            }
                         }
                     }
                 }
@@ -300,15 +324,18 @@ impl Evictor {
     async fn run_eviction_tasks_provider(&self) {
         let backend = self.backend.clone();
         let workers_tasks_tx = self.workers_tasks_tx.clone();
-        let shutdown_token = self.shutdown_token.clone();
+        let shutdown_token = self.shutdown_ctx.clone();
         let workers_ctx = self.workers_ctx.clone();
         let cfg = self.config().await;
         let cfg_arc = Arc::new(cfg);
-        
+
         tokio::task::spawn(async move {
             let tick_freq = cfg_arc.get_freq().get_tick_freq();
             let mut interval = tokio::time::interval(tick_freq);
             interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+            // Skip the first immediate tick
+            // Skip the first immediate tick to match interval behavior
+            interval.tick().await;
 
             loop {
                 tokio::select! {
@@ -316,8 +343,8 @@ impl Evictor {
                         return;
                     }
                     _ = async {
-                        let w_ctx = workers_ctx.read().await;
-                        w_ctx.cancelled().await
+                        let token = { workers_ctx.read().await.clone() };
+                        token.cancelled().await
                     } => {
                         return;
                     }
@@ -336,19 +363,19 @@ impl Evictor {
     /// Soft eviction logger.
     async fn soft_eviction_logger(&self, interval_duration: Duration) {
         use crate::workers::evictor::telemetry;
-        
+
         let mut interval = tokio::time::interval(interval_duration);
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
         loop {
             tokio::select! {
-                _ = self.shutdown_token.cancelled() => {
+                _ = self.shutdown_ctx.cancelled() => {
                     return;
                 }
                 _ = interval.tick() => {
                     // Log eviction statistics and update metrics
                     telemetry::log_stats(&self.name, &self.counters);
-                    
+
                     // Reset counters after logging
                     self.counters.evicted_items.store(0, Ordering::Relaxed);
                     self.counters.evicted_bytes.store(0, Ordering::Relaxed);
@@ -365,16 +392,7 @@ impl Service for Arc<Evictor> {
     }
 
     fn cfg(&self) -> Arc<dyn Config> {
-        // This is sync, so we need to block
-        // Use std::thread::scope to avoid blocking the runtime thread
-        let handle = tokio::runtime::Handle::current();
-        std::thread::scope(|scope| {
-            scope.spawn(|| {
-                handle.block_on(async {
-                    self.config().await
-                })
-            }).join().unwrap()
-        })
+        self.cfg.blocking_read().clone()
     }
 
     fn replicas(&self) -> usize {
@@ -382,6 +400,9 @@ impl Service for Arc<Evictor> {
     }
 
     fn serve(&self, t: Arc<dyn Transport>) {
+        // Ensure transport is set before any signals are sent.
+        let _ = self.transport.get_or_init(|| t.clone());
+
         let evictor_clone = Arc::clone(self);
         tokio::task::spawn(async move {
             evictor_clone.loop_handler(t).await;
@@ -389,15 +410,9 @@ impl Service for Arc<Evictor> {
     }
 
     fn transport(&self) -> Arc<dyn Transport> {
-        // Use std::thread::scope to avoid blocking the runtime thread
-        let handle = tokio::runtime::Handle::current();
-        std::thread::scope(|scope| {
-            scope.spawn(|| {
-                handle.block_on(async {
-                    self.transport.lock().await.clone().unwrap()
-                })
-            }).join().unwrap()
-        })
+        self.transport
+            .get()
+            .expect("transport not initialized")
+            .clone()
     }
 }
-
