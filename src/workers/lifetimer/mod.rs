@@ -1,9 +1,8 @@
-// Package lifetimer provides lifetime management worker group.
+//! Lifetime management worker group.
 
-pub mod lifetimer;
 pub mod counters;
+pub mod lifetimer;
 pub mod telemetry;
 
 // Re-export main types
 pub use lifetimer::LifetimeManager;
-

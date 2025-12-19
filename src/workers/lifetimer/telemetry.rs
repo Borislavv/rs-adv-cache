@@ -1,14 +1,15 @@
-// Package lifetimer provides telemetry for lifetime management.
+//! Telemetry for lifetime management.
+//
 
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio_util::sync::CancellationToken;
 use tokio::time::interval;
+use tokio_util::sync::CancellationToken;
 
 use crate::config::{Config as AppConfig, ConfigTrait};
-use crate::metrics;
 use crate::governor::Config;
+use crate::metrics;
 
 use super::counters::Counters;
 
@@ -31,10 +32,11 @@ pub async fn logger(
                 return;
             }
             _ = ticker.tick() => {
-                let workers = w_num_active.load(Ordering::Relaxed);
-                let active = cfg.read().await.as_ref().is_enabled();
+                let is_enabled = cfg.read().await.as_ref().is_enabled();
+                let (name_snapshot, workers, active) =
+                    stats_snapshot(&name, &w_num_active, is_enabled);
                 let (affected, errors, scans, miss, hits) = counters.reset();
-                
+
                 metrics::add_lifetime_stat_counters(affected, errors, scans, miss, hits);
 
                 let on_ttl = if g_cfg.lifetime().map(|l| l.is_remove_on_ttl.load(Ordering::Relaxed)).unwrap_or(false) {
@@ -52,7 +54,7 @@ pub async fn logger(
                     scans = scans,
                     scans_hit = hits,
                     scans_miss = miss,
-                    name = %name,
+                    name = %name_snapshot,
                     "lifetime manager stats"
                 );
             }
@@ -61,12 +63,14 @@ pub async fn logger(
 }
 
 /// Gets a stats snapshot.
-#[allow(dead_code)]
 pub fn stats_snapshot(
     name: &str,
     w_num_active: &std::sync::atomic::AtomicI64,
     is_enabled: bool,
 ) -> (String, i64, bool) {
-    (name.to_string(), w_num_active.load(Ordering::Relaxed), is_enabled)
+    (
+        name.to_string(),
+        w_num_active.load(Ordering::Relaxed),
+        is_enabled,
+    )
 }
-

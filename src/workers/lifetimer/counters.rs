@@ -1,4 +1,5 @@
-// Package lifetimer provides counters for lifetime management.
+//! Counters for lifetime management.
+//
 
 use std::sync::atomic::{AtomicI64, Ordering};
 
@@ -44,4 +45,3 @@ impl Default for Counters {
         Self::new()
     }
 }
-
