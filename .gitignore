@@ -10,4 +10,3 @@ upstream*
 /target
 /.cursor
 /src/scripts/stress/check_resps/target
-.DS*
