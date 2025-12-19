@@ -24,13 +24,44 @@ pub enum SamplingMode {
     Ratio,  // ParentBased(TraceIDRatioBased)
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Deserialize, Serialize)]
 pub struct Cache {
     #[serde(rename = "cache")]
     pub cache: CacheBox,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+impl Clone for Cache {
+    fn clone(&self) -> Self {
+        // Clone is expensive but needed for some tests
+        // Rules are shared via Arc, so cloning is safe
+        Self {
+            cache: CacheBox {
+                env: self.cache.env.clone(),
+                enabled: self.cache.enabled,
+                atomic_enabled: Arc::new(AtomicBool::new(self.cache.atomic_enabled.load(Ordering::Relaxed))),
+                logs: self.cache.logs.clone(),
+                runtime: self.cache.runtime.clone(),
+                api: self.cache.api.clone(),
+                upstream: self.cache.upstream.clone(),
+                data: self.cache.data.clone(),
+                storage: self.cache.storage.clone(),
+                compression: self.cache.compression.clone(),
+                eviction: self.cache.eviction.clone(),
+                admission: self.cache.admission.clone(),
+                traces: self.cache.traces.clone(),
+                lifetime: self.cache.lifetime.clone(),
+                metrics: self.cache.metrics.clone(),
+                k8s: self.cache.k8s.clone(),
+                rules: self.cache.rules.as_ref().map(|rules| {
+                    rules.iter().map(|(k, v)| (k.clone(), Arc::clone(v))).collect()
+                }),
+                rules_raw: None, // rules_raw is only used during deserialization
+            },
+        }
+    }
+}
+
+#[derive(Debug, Deserialize, Serialize)]
 pub struct CacheBox {
     pub env: String,
     pub enabled: bool,
@@ -49,7 +80,10 @@ pub struct CacheBox {
     pub lifetime: Option<Lifetime>,
     pub metrics: Option<Metrics>,
     pub k8s: Option<K8S>,
-    pub rules: Option<HashMap<String, Rule>>,
+    #[serde(skip)]
+    pub rules: Option<HashMap<String, Arc<Rule>>>,
+    #[serde(rename = "rules")]
+    rules_raw: Option<HashMap<String, Rule>>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -74,8 +108,6 @@ pub struct Traces {
     pub service_name: Option<String>,
     #[serde(rename = "service_version")]
     pub service_version: Option<String>,
-    #[serde(rename = "service_tenant")]
-    pub service_tenant: Option<String>,
     pub exporter: Option<String>,
     pub endpoint: Option<String>,
     pub insecure: Option<bool>,
@@ -95,9 +127,6 @@ pub struct Traces {
 pub struct Api {
     pub name: Option<String>,
     pub port: Option<String>,
-    #[serde(skip)]
-    #[allow(dead_code)]
-    pub net_listener: Option<std::net::TcpListener>,
 }
 
 impl Clone for Api {
@@ -105,7 +134,6 @@ impl Clone for Api {
         Self {
             name: self.name.clone(),
             port: self.port.clone(),
-            net_listener: None, // TcpListener doesn't implement Clone
         }
     }
 }
@@ -298,12 +326,16 @@ pub struct RuleValue {
     pub headers_map: Option<std::collections::HashSet<String>>,
 }
 
-// Config trait (similar to Go interface)
+// Config trait
 pub trait ConfigTrait {
     fn logs(&self) -> Option<&Logs>;
     fn is_prod(&self) -> bool;
     #[allow(dead_code)]
     fn is_debug(&self) -> bool;
+    #[allow(dead_code)]
+    fn is_dev(&self) -> bool;
+    #[allow(dead_code)]
+    fn is_test(&self) -> bool;
     fn is_enabled(&self) -> bool;
     fn set_enabled(&self, v: bool);
     fn runtime(&self) -> &Runtime;
@@ -317,7 +349,7 @@ pub trait ConfigTrait {
     fn storage(&self) -> &Storage;
     fn compression(&self) -> Option<&Compression>;
     fn k8s(&self) -> Option<&K8S>;
-    fn rule(&self, path: &str) -> Option<&Rule>;
+    fn rule(&self, path: &str) -> Option<Arc<Rule>>;
 }
 
 // Config type alias for convenience
@@ -336,6 +368,14 @@ impl ConfigTrait for Config {
         self.cache.env == DEBUG
     }
 
+    fn is_dev(&self) -> bool {
+        self.cache.env == DEV
+    }
+
+    fn is_test(&self) -> bool {
+        self.cache.env == TEST
+    }
+
     fn is_enabled(&self) -> bool {
         self.cache.atomic_enabled.load(Ordering::Relaxed)
     }
@@ -345,7 +385,10 @@ impl ConfigTrait for Config {
     }
 
     fn runtime(&self) -> &Runtime {
-        self.cache.runtime.as_ref().unwrap_or(&Runtime { num_cpus: 0 })
+        self.cache
+            .runtime
+            .as_ref()
+            .unwrap_or(&Runtime { num_cpus: 0 })
     }
 
     fn api(&self) -> Option<&Api> {
@@ -377,7 +420,10 @@ impl ConfigTrait for Config {
     }
 
     fn storage(&self) -> &Storage {
-        self.cache.storage.as_ref().expect("storage config is required")
+        self.cache
+            .storage
+            .as_ref()
+            .expect("storage config is required")
     }
 
     fn compression(&self) -> Option<&Compression> {
@@ -388,8 +434,8 @@ impl ConfigTrait for Config {
         self.cache.k8s.as_ref()
     }
 
-    fn rule(&self, path: &str) -> Option<&Rule> {
-        self.cache.rules.as_ref()?.get(path)
+    fn rule(&self, path: &str) -> Option<Arc<Rule>> {
+        self.cache.rules.as_ref()?.get(path).map(Arc::clone)
     }
 }
 
@@ -397,9 +443,10 @@ impl Config {
     /// Loads configuration from a YAML file.
     pub fn load<P: AsRef<Path>>(path: P) -> Result<Self> {
         let path = path.as_ref();
-        
+
         // Resolve absolute path
-        let abs_path = path.canonicalize()
+        let abs_path = path
+            .canonicalize()
             .with_context(|| format!("failed to resolve absolute config filepath: {:?}", path))?;
 
         // Read file
@@ -412,7 +459,7 @@ impl Config {
 
         // Initialize atomic fields
         cfg.cache.atomic_enabled = Arc::new(AtomicBool::new(cfg.cache.enabled));
-        
+
         if let Some(ref mut admission) = cfg.cache.admission {
             admission.is_enabled = Arc::new(AtomicBool::new(admission.enabled));
         }
@@ -423,16 +470,13 @@ impl Config {
             storage.is_listing = storage.mode.as_deref() == Some(LISTING_MODE);
         }
 
-        // Process rules
-        if let Some(ref mut rules) = cfg.cache.rules {
-            // Get default lifetime before mutable borrow
+        if let Some(ref mut rules_raw) = cfg.cache.rules_raw {
             let default_lifetime = cfg.cache.lifetime.as_ref().cloned();
-            for (rule_path, rule) in rules.iter_mut() {
-                // Set path
+            let mut processed_rules = HashMap::new();
+            for (rule_path, mut rule) in rules_raw.drain() {
                 rule.path = Some(rule_path.clone());
                 rule.path_bytes = Some(rule_path.as_bytes().to_vec());
 
-                // Set default lifetime if not set
                 if rule.refresh.is_none() {
                     if let Some(ref lifetime) = default_lifetime {
                         rule.refresh = Some(LifetimeRule {
@@ -444,18 +488,15 @@ impl Config {
                     }
                 }
 
-                // Process query bytes
                 if let Some(ref queries) = rule.cache_key.query {
-                    rule.cache_key.query_bytes = Some(
-                        queries.iter().map(|q| q.as_bytes().to_vec()).collect()
-                    );
+                    rule.cache_key.query_bytes =
+                        Some(queries.iter().map(|q| q.as_bytes().to_vec()).collect());
                 }
 
-                // Process headers map
                 if let Some(ref headers) = rule.cache_key.headers {
                     let mut headers_map = HashMap::new();
                     for header in headers {
-                        headers_map.insert(header.clone(), header.as_bytes().to_vec());
+                        headers_map.insert(header.to_lowercase(), header.as_bytes().to_vec());
                     }
                     rule.cache_key.headers_map = Some(headers_map);
                 }
@@ -464,7 +505,12 @@ impl Config {
                 if let Some(ref headers) = rule.cache_value.headers {
                     rule.cache_value.headers_map = Some(headers.iter().cloned().collect());
                 }
+                
+                // Wrap in Arc and store
+                processed_rules.insert(rule_path, Arc::new(rule));
             }
+            cfg.cache.rules = Some(processed_rules);
+            cfg.cache.rules_raw = None; // Clear raw rules after processing
         }
 
         // Process upstream backends
@@ -482,9 +528,7 @@ impl Config {
             }
         }
 
-        // Calculate memory limits
-        // Extract values before mutable borrow to avoid conflicts
-        let (soft_limit, hard_limit, size) = if let Some(ref eviction) = cfg.eviction() {
+        let (soft_limit, hard_limit, size) = if let Some(eviction) = cfg.eviction() {
             let soft = eviction.soft_limit.unwrap_or(0.8);
             let hard = eviction.hard_limit.unwrap_or(0.99);
             let storage_size = cfg.cache.storage.as_ref().map(|s| s.size).unwrap_or(0);
@@ -492,11 +536,12 @@ impl Config {
         } else {
             (0.8, 0.99, 0)
         };
-        
+
         if let Some(ref mut storage) = cfg.cache.storage {
             storage.soft_memory_limit = (size as f64 * soft_limit) as i64;
             storage.hard_memory_limit = (size as f64 * hard_limit) as i64;
-            storage.admission_memory_limit = storage.soft_memory_limit - (100 << 20); // soft - 100mb
+            storage.admission_memory_limit = storage.soft_memory_limit - (100 << 20);
+            // soft - 100mb
         }
 
         // Process lifetime TTL mode
@@ -531,8 +576,6 @@ impl Config {
 }
 
 // Test config is always available for integration tests
-#[cfg(test)]
 mod test_config;
-#[cfg(test)]
+#[allow(dead_code)]
 pub use test_config::new_test_config;
-
