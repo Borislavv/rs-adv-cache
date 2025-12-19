@@ -30,7 +30,7 @@ mod tests {
         body: &[u8],
     ) -> Entry {
         let rule = make_rule();
-        let mut entry = Entry::new(rule, queries, headers);
+        let entry = Entry::new(rule, queries, headers);
         let response = Response {
             status,
             headers: vec![
@@ -108,7 +108,7 @@ mod tests {
         let queries = vec![];
         let headers = vec![];
         let rule = make_rule();
-        let mut entry = Entry::new(rule, &queries, &headers);
+        let entry = Entry::new(rule, &queries, &headers);
         
         let response = Response {
             status: 200,
@@ -151,7 +151,7 @@ mod tests {
         let body = b"{\"data\":\"test\"}";
 
         let rule = make_rule();
-        let mut entry = Entry::new(rule, &queries, &headers);
+        let entry = Entry::new(rule, &queries, &headers);
         let response = Response {
             status: 200,
             headers: response_headers,
