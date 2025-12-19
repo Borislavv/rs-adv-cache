@@ -1,4 +1,4 @@
-// Package ctime provides cached time to avoid syscalls.
+//! Cached time to avoid syscalls.
 
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -57,8 +57,6 @@ pub fn unix_nano() -> i64 {
 }
 
 /// Returns the duration elapsed since the given time.
-#[allow(dead_code)]
 pub fn since(t: SystemTime) -> Duration {
     now().duration_since(t).unwrap_or(Duration::ZERO)
 }
-

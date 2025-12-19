@@ -1,7 +1,11 @@
-// Package bytes provides utilities for byte manipulation and formatting.
+//! Byte manipulation and formatting utilities.
+//! 
+//! Provides functions for memory size formatting and optimized byte slice comparison.
 
 /// Formats memory size in bytes to a human-readable string.
-/// Converts bytes to TB, GB, MB, KB format similar to Go's FmtMem function.
+/// 
+/// Converts bytes to the largest appropriate unit (TB, GB, MB, KB) with remainder.
+/// Example: 1.5GB displays as "1GB 512MB".
 pub fn fmt_mem(bytes: i64) -> String {
     const KB: i64 = 1024;
     const MB: i64 = KB * 1024;
@@ -32,9 +36,12 @@ pub fn fmt_mem(bytes: i64) -> String {
     }
 }
 
-/// Compares two byte slices for equality.
-/// For small slices (< 32 bytes), uses direct comparison.
-/// For larger slices, uses a fast hash-based comparison using xxh3.
+/// Compares two byte slices for equality with optimized performance.
+/// 
+/// For small slices (< 32 bytes), uses direct byte-by-byte comparison.
+/// For larger slices, uses fast hash-based comparison with xxh3:
+/// hashes first 8, middle 8, and last 8 bytes for O(1) comparison
+/// with negligible collision probability for cache use cases.
 pub fn is_bytes_equal(a: &[u8], b: &[u8]) -> bool {
     if a.len() != b.len() {
         return false;
@@ -47,23 +54,23 @@ pub fn is_bytes_equal(a: &[u8], b: &[u8]) -> bool {
     let mut hasher_a = Xxh3::new();
     let mut hasher_b = Xxh3::new();
 
-    // Hash first 8 bytes
+    // Sample three 8-byte chunks: start, middle, end
     hasher_a.update(&a[..8]);
     hasher_b.update(&b[..8]);
 
-    // Hash middle 8 bytes
     let mid = a.len() / 2;
     hasher_a.update(&a[mid..mid + 8]);
     hasher_b.update(&b[mid..mid + 8]);
 
-    // Hash last 8 bytes
     hasher_a.update(&a[a.len() - 8..]);
     hasher_b.update(&b[b.len() - 8..]);
 
     hasher_a.digest() == hasher_b.digest()
 }
 
-/// Alias for is_bytes_equal to match Go naming convention.
+/// Compares two byte slices for equality using fast hash-based comparison.
+/// 
+/// This is a convenience function with alternative naming for compatibility.
 pub fn is_bytes_are_equals(a: &[u8], b: &[u8]) -> bool {
     is_bytes_equal(a, b)
 }
@@ -88,4 +95,3 @@ mod tests {
         assert!(!is_bytes_equal(a, c));
     }
 }
-

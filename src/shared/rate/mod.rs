@@ -1,10 +1,11 @@
-// Package rate provides rate limiting functionality.
+//! Rate limiting functionality.
+//
 
+use governor::{Quota, RateLimiter};
+use std::num::NonZeroU32;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
-use governor::{Quota, RateLimiter};
-use std::num::NonZeroU32;
 
 /// Rate limiter with token bucket.
 pub struct Limiter {
@@ -26,7 +27,8 @@ impl Limiter {
         // Spawn provider task
         let limiter_clone = limiter.clone();
         tokio::spawn(async move {
-            let mut interval = tokio::time::interval(std::time::Duration::from_secs(1) / limit as u32);
+            let mut interval =
+                tokio::time::interval(std::time::Duration::from_secs(1) / limit as u32);
             loop {
                 tokio::select! {
                     _ = shutdown_token.cancelled() => {
@@ -42,9 +44,7 @@ impl Limiter {
             }
         });
 
-        Self {
-            ch: rx,
-        }
+        Self { ch: rx }
     }
 
     /// Takes a token from the limiter (blocks until available).
@@ -52,4 +52,3 @@ impl Limiter {
         let _ = self.ch.recv().await;
     }
 }
-
