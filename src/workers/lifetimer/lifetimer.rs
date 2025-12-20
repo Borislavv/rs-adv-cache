@@ -343,60 +343,41 @@ impl LifetimeManager {
                     _ = ctx.cancelled() => {
                         return;
                     }
-                    _ = async {
-                        loop {
-                            let msg = {
-                                let mut guard = w_kill_rx.lock().await;
-                                guard.try_recv()
-                            };
-                            match msg {
-                                Ok(()) | Err(tokio::sync::mpsc::error::TryRecvError::Empty) => {
-                                    // No message available, yield and try again
-                                    tokio::task::yield_now().await;
-                                    continue;
-                                }
-                                Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => {
-                                    // Channel closed
-                                    break;
-                                }
+                    kill_result = async {
+                        let mut guard = w_kill_rx.lock().await;
+                        guard.recv().await
+                    } => {
+                        match kill_result {
+                            Some(()) => {
+                                // Kill signal received
+                                return;
+                            }
+                            None => {
+                                // Channel closed, exit worker
+                                return;
                             }
                         }
-                    } => {
-                        // Kill signal received
-                        return;
                     }
-                    entry = async {
-                        // CRITICAL: Use try_recv in a loop to avoid holding lock across await
-                        // This prevents lock contention and starvation under high load
-                        loop {
-                            let msg = {
-                                let mut guard = w_tasks_rx.lock().await;
-                                guard.try_recv()
-                            };
-                            match msg {
-                                Ok(entry) => break Some(entry),
-                                Err(tokio::sync::mpsc::error::TryRecvError::Empty) => {
-                                    // No message available, yield and try again
-                                    tokio::task::yield_now().await;
-                                    continue;
-                                }
-                                Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => {
-                                    // Channel closed
-                                    break None;
+                    entry_result = async {
+                        let mut guard = w_tasks_rx.lock().await;
+                        guard.recv().await
+                    } => {
+                        match entry_result {
+                            Some(mut entry) => {
+                                // Global rate limiting for refresh
+                                g_rate.until_ready().await;
+                                match backend.on_ttl(&mut entry).await {
+                                    Ok(_) => {
+                                        counters.success_updates.fetch_add(1, Ordering::Relaxed);
+                                    }
+                                    Err(_) => {
+                                        counters.error_updates.fetch_add(1, Ordering::Relaxed);
+                                    }
                                 }
                             }
-                        }
-                    } => {
-                        if let Some(mut entry) = entry {
-                            // Global rate limiting for refresh
-                            g_rate.until_ready().await;
-                            match backend.on_ttl(&mut entry).await {
-                                Ok(_) => {
-                                    counters.success_updates.fetch_add(1, Ordering::Relaxed);
-                                }
-                                Err(_) => {
-                                    counters.error_updates.fetch_add(1, Ordering::Relaxed);
-                                }
+                            None => {
+                                // Channel closed, exit worker
+                                return;
                             }
                         }
                     }
