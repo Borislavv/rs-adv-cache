@@ -1,6 +1,6 @@
 # Advanced Cache (advCache) - High-Performance HTTP Cache & Reverse Proxy
 
-[![Rust Version](https://img.shields.io/static/v1?label=Rust&message=1.82%2B&logo=rust&color=000000)](https://www.rust-lang.org/tools/install) [![Coverage](https://img.shields.io/codecov/c/github/Borislavv/adv-cache?label=coverage)](https://codecov.io/gh/Borislavv/adv-cache) [![License](https://img.shields.io/badge/License-Apache--2.0-green.svg)](./LICENSE)
+[![Rust Version](https://img.shields.io/static/v1?label=Rust&message=1.82%2B&logo=rust&color=000000)](https://www.rust-lang.org/tools/install) [![Coverage](https://img.shields.io/codecov/c/github/Borislavv/rs-adv-cache?label=coverage)](https://codecov.io/gh/Borislavv/adv-cache) [![License](https://img.shields.io/badge/License-Apache--2.0-green.svg)](./LICENSE)
 
 **AdvCache** is a high-performance, production-ready in-memory HTTP cache and reverse proxy designed for latency-sensitive workloads. Built with Rust using `tokio` and `axum`, it delivers exceptional throughput (175-300k RPS) with minimal memory overhead and zero-allocation hot paths.
 
