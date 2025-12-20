@@ -196,13 +196,18 @@ async fn test_lifetimer_refreshes_expired_entries() {
     let rule = make_rule("/api/v1/user", cfg.lifetime().unwrap().ttl);
     let now = crate::time::unix_nano();
 
-    // Insert expired entries and collect them for deterministic queueing.
+    // Insert expired entries and collect handles for deterministic queueing.
     let mut entries = Vec::new();
     for i in 0..8 {
         let entry = make_entry(rule.clone(), i, 512);
-        entry.set_refreshed_at_for_tests(now - (ttl_ns * 2));
         db.set(entry.clone());
         entries.push(entry);
+    }
+
+    // Set expired timestamps AFTER set() to ensure they persist in storage
+    // This is critical: set() may update timestamps, so we set expired time after entry is stored
+    for entry in &entries {
+        entry.set_refreshed_at_for_tests(now - (ttl_ns * 2));
     }
 
     // Critical: trigger get() for each expired entry to enqueue them via touch()
