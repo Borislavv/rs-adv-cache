@@ -126,3 +126,45 @@ pub fn phash(b: &[u8]) -> String {
 pub fn hash(b: &[u8]) -> String {
     phash(b)
 }
+
+/// Extracts the Last-Updated-At header value from response headers.
+/// 
+/// Returns the header value as a String, or panics if the header is missing.
+/// This is used to determine cache HIT/MISS: if Last-Updated-At stays the same,
+/// it's a cache HIT; if it changes, it's a cache MISS.
+pub fn get_updated_at(headers: &HashMap<String, String>) -> String {
+    headers
+        .get("last-updated-at")
+        .or_else(|| headers.get("Last-Updated-At"))
+        .expect("Last-Updated-At header must be present in response")
+        .clone()
+}
+
+/// Sets global admin defaults to ensure deterministic test behavior.
+/// 
+/// This function sets safe defaults for admin toggles:
+/// - Bypass: OFF (cache mode enabled)
+/// - Admission: ON (admission control enabled)
+/// 
+/// Should be called at the start of tests that depend on specific admin state.
+pub async fn set_global_defaults(base: &str) {
+    use crate::support::{assert_ok, do_json, H};
+    
+    // Disable bypass (enable cache mode) - use /cache/bypass/off endpoint
+    let client = reqwest::Client::new();
+    let _ = client
+        .get(&format!("{}/cache/bypass/off", base))
+        .send()
+        .await
+        .unwrap();
+    
+    // Enable admission control
+    #[derive(serde::Deserialize)]
+    struct AdmissionResponse {
+        #[serde(rename = "is_active")]
+        _is_active: bool,
+    }
+    let _ = assert_ok(
+        do_json::<AdmissionResponse>("GET", &format!("{}/advcache/admission/on", base), &H::new()).await,
+    );
+}

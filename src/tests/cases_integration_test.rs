@@ -14,7 +14,10 @@ struct AdmissionResponse {
 /// When admission is disabled, entries that would be rejected should still be stored.
 #[tokio::test]
 async fn test_admission_control_affects_storage() {
-    init_test_harness().await.unwrap();
+    use crate::support::with_global_lock;
+    
+    with_global_lock(|| async {
+        init_test_harness().await.unwrap();
 
     let base = cache_addr().await;
 
@@ -54,100 +57,120 @@ async fn test_admission_control_affects_storage() {
     let _ = assert_ok(
         do_json::<AdmissionResponse>("GET", &format!("{}/advcache/admission/on", base), &H::new()).await,
     );
+    }).await;
 }
 
 /// Test that invalidation actually causes cache misses on subsequent requests.
 #[tokio::test]
 async fn test_invalidation_causes_cache_miss() {
-    init_test_harness().await.unwrap();
-
-    let ns = new_namespace("Test_Invalidation_CausesMiss");
-    let base = cache_addr().await;
-
-    let mut params = HashMap::new();
-    params.insert("user[id]".to_string(), "inv_int1".to_string());
-    params.insert("domain".to_string(), "invm.example".to_string());
-    params.insert("language".to_string(), "en".to_string());
-
-    let path = with_ns("/api/v1/user", &ns, &params);
-    let mut headers = H::new();
-    headers.insert("Accept-Encoding".to_string(), "identity".to_string());
-
-    // Warm cache
-    let (_, _, body_original, _) = assert_ok(
-        do_json::<serde_json::Value>("GET", &format!("{}{}", base, path), &headers).await,
-    );
-
-    // Verify cache hit
-    let (_, _, body_hit, _) = assert_ok(
-        do_json::<serde_json::Value>("GET", &format!("{}{}", base, path), &headers).await,
-    );
-    assert_eq!(body_original, body_hit, "should be cache hit before invalidation");
-
-    // Invalidate
-    #[derive(serde::Deserialize)]
-    struct InvalidateResponse {
-        success: bool,
-        affected: i64,
-    }
-    let invalidate_url = format!(
-        "{}/advcache/invalidate?_path=/api/v1/user&user[id]=inv_int1&domain=invm.example&language=en",
-        base
-    );
-    let (invalidate_status, _, invalidate_body, _) = assert_ok(
-        do_json::<InvalidateResponse>("GET", &invalidate_url, &H::new()).await,
-    );
-    assert_equal(200, invalidate_status);
-    let invalidate_resp: InvalidateResponse = serde_json::from_slice(&invalidate_body).unwrap();
-    assert!(invalidate_resp.success);
-    assert!(invalidate_resp.affected >= 1);
-
-    // Wait for invalidation to take effect.
-    // Poll every 500ms for up to 30 seconds, checking that invalidation was applied.
-    // Since we already verified affected >= 1, we just need to wait for the system
-    // to process the invalidation. We verify this by ensuring requests still work.
-    let timeout = std::time::Duration::from_secs(30);
-    let poll_interval = tokio::time::Duration::from_millis(500);
-    let start = std::time::Instant::now();
+    use crate::support::{get_updated_at, set_global_defaults, with_global_lock};
     
-    // Wait for invalidation to be processed
-    // The condition is: invalidation was successful (affected >= 1) and system is ready
-    // We verify readiness by making a test request that succeeds
-    loop {
-        // Check if system is ready by making a request
-        let (status_after, _, _, _) = assert_ok(
+    with_global_lock(|| async {
+        init_test_harness().await.unwrap();
+
+        let ns = new_namespace("Test_Invalidation_CausesMiss");
+        let base = cache_addr().await;
+
+        // Set global defaults to ensure deterministic behavior
+        set_global_defaults(&base).await;
+
+        let mut params = HashMap::new();
+        params.insert("user[id]".to_string(), "inv_int1".to_string());
+        params.insert("domain".to_string(), "invm.example".to_string());
+        params.insert("language".to_string(), "en".to_string());
+
+        let path = with_ns("/api/v1/user", &ns, &params);
+        let mut headers = H::new();
+        headers.insert("Accept-Encoding".to_string(), "identity".to_string());
+
+        // Warm cache - first GET (cache MISS, entry is stored)
+        let (status1, headers1, _, _) = assert_ok(
             do_json::<serde_json::Value>("GET", &format!("{}{}", base, path), &headers).await,
         );
-        
-        // If request succeeds, invalidation has been processed and system is ready
-        if status_after == 200 {
-            // Invalidation processed successfully, test passes
-            break;
+        assert_equal(200, status1);
+        let ua1 = get_updated_at(&headers1);
+
+        // Second GET - should be cache HIT (same Last-Updated-At)
+        let (status2, headers2, _, _) = assert_ok(
+            do_json::<serde_json::Value>("GET", &format!("{}{}", base, path), &headers).await,
+        );
+        assert_equal(200, status2);
+        let ua2 = get_updated_at(&headers2);
+        assert_eq!(
+            ua2, ua1,
+            "expected cache HIT: Last-Updated-At must be stable before invalidation"
+        );
+
+        // Invalidate
+        #[derive(serde::Deserialize)]
+        struct InvalidateResponse {
+            success: bool,
+            affected: i64,
         }
+        let invalidate_url = format!(
+            "{}/advcache/invalidate?_path=/api/v1/user&user[id]=inv_int1&domain=invm.example&language=en",
+            base
+        );
+        let (invalidate_status, _, invalidate_body, _) = assert_ok(
+            do_json::<InvalidateResponse>("GET", &invalidate_url, &H::new()).await,
+        );
+        assert_equal(200, invalidate_status);
+        let invalidate_resp: InvalidateResponse = serde_json::from_slice(&invalidate_body).unwrap();
+        assert!(invalidate_resp.success);
+        assert!(invalidate_resp.affected >= 1);
+
+        // Wait for invalidation to take effect.
+        // Poll every 500ms for up to 30 seconds, checking that Last-Updated-At changed.
+        let timeout = std::time::Duration::from_secs(30);
+        let poll_interval = tokio::time::Duration::from_millis(500);
+        let start = std::time::Instant::now();
         
-        if start.elapsed() >= timeout {
-            panic!(
-                "timeout waiting for invalidation to take effect: last status was {} after {:?}",
-                status_after,
-                start.elapsed()
+        loop {
+            // Check if invalidation was applied by checking Last-Updated-At
+            let (status_after, headers_after, _, _) = assert_ok(
+                do_json::<serde_json::Value>("GET", &format!("{}{}", base, path), &headers).await,
             );
+            assert_equal(200, status_after);
+            
+            let ua_after = get_updated_at(&headers_after);
+            
+            // If Last-Updated-At changed, invalidation was successful
+            if ua_after != ua1 {
+                // Invalidation processed successfully - entry was refreshed
+                break;
+            }
+            
+            if start.elapsed() >= timeout {
+                panic!(
+                    "timeout waiting for invalidation to take effect: Last-Updated-At still {} after {:?}",
+                    ua_after,
+                    start.elapsed()
+                );
+            }
+            
+            tokio::time::sleep(poll_interval).await;
         }
         
-        tokio::time::sleep(poll_interval).await;
-    }
-    
-    // Final verification - entry should be invalidated and request should succeed
-    let (status_after, _, _, _) = assert_ok(
-        do_json::<serde_json::Value>("GET", &format!("{}{}", base, path), &headers).await,
-    );
-    assert_equal(200, status_after);
-    // Entry was invalidated, so it should trigger refresh even if served stale
+        // Final verification - entry should be invalidated and Last-Updated-At should be different
+        let (status_final, headers_final, _, _) = assert_ok(
+            do_json::<serde_json::Value>("GET", &format!("{}{}", base, path), &headers).await,
+        );
+        assert_equal(200, status_final);
+        let ua_final = get_updated_at(&headers_final);
+        assert_ne!(
+            ua_final, ua1,
+            "expected cache MISS after invalidation: Last-Updated-At must change"
+        );
+    }).await;
 }
 
 /// Test that cache clear endpoint actually clears all cached entries.
 #[tokio::test]
 async fn test_cache_clear_actually_clears() {
-    init_test_harness().await.unwrap();
+    use crate::support::with_global_lock;
+    
+    with_global_lock(|| async {
+        init_test_harness().await.unwrap();
 
     let ns = new_namespace("Test_Clear_ActuallyClears");
     let base = cache_addr().await;
@@ -223,12 +246,16 @@ async fn test_cache_clear_actually_clears() {
         do_json::<serde_json::Value>("GET", &format!("{}{}", base, path2), &headers).await,
     );
     assert_equal(200, status2_after);
+    }).await;
 }
 
 /// Test that compression middleware actually affects response headers.
 #[tokio::test]
 async fn test_compression_middleware_affects_headers() {
-    init_test_harness().await.unwrap();
+    use crate::support::with_global_lock;
+    
+    with_global_lock(|| async {
+        init_test_harness().await.unwrap();
 
     let base = cache_addr().await;
 
@@ -267,12 +294,16 @@ async fn test_compression_middleware_affects_headers() {
     let _ = assert_ok(
         do_json::<StatusResponse>("GET", &format!("{}/advcache/http/compression/off", base), &H::new()).await,
     );
+    }).await;
 }
 
 /// Test that multiple invalidations don't interfere with each other.
 #[tokio::test]
 async fn test_multiple_invalidations_independent() {
-    init_test_harness().await.unwrap();
+    use crate::support::with_global_lock;
+    
+    with_global_lock(|| async {
+        init_test_harness().await.unwrap();
 
     let ns = new_namespace("Test_MultipleInvalidations");
     let base = cache_addr().await;
@@ -344,12 +375,16 @@ async fn test_multiple_invalidations_independent() {
     );
     assert_equal(200, status2_after);
     assert_eq!(body2_orig, body2_after, "second entry should still be cached after invalidating first");
+    }).await;
 }
 
 /// Test that cache behavior is consistent when switching between cache and proxy modes.
 #[tokio::test]
 async fn test_cache_proxy_mode_switching_consistency() {
-    init_test_harness().await.unwrap();
+    use crate::support::with_global_lock;
+    
+    with_global_lock(|| async {
+        init_test_harness().await.unwrap();
 
     let ns = new_namespace("Test_CacheProxy_Switching");
     let base = cache_addr().await;
@@ -414,4 +449,5 @@ async fn test_cache_proxy_mode_switching_consistency() {
     );
     assert_equal(200, status4);
     // May be same (cache hit) or new (if entry expired/refreshed), but should work
+    }).await;
 }
