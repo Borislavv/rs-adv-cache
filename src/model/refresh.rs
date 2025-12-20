@@ -59,11 +59,15 @@ impl Entry {
             return false;
         }
 
-        let x = (elapsed as f64 / ttl as f64).clamp(0.0, 1.0);
+        // Calculate staleness ratio without clamping to allow probability to grow
+        // with increasing staleness (elapsed can be much larger than ttl)
+        let x = (elapsed as f64 / ttl as f64).max(0.0);
 
         // Lifetime probability via the exponential CDF:
         // p = 1 - exp(-beta * x). Larger beta -> steeper growth.
-        let probability = 1.0 - (-beta * x).exp();
+        // For numerical stability, prevent underflow in exp() for very large x
+        let z = (-beta * x).max(-700.0);
+        let probability = 1.0 - z.exp();
         rand::float64() < probability
     }
 
