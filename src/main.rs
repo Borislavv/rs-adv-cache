@@ -143,10 +143,24 @@ fn configure_logger(cfg: &Config) {
     }
 }
 
-#[tokio::main]
-async fn main() -> Result<()> {
+fn main() -> Result<()> {
     // Parse command-line arguments
     let args = Args::parse();
+    
+    // Initialize Prometheus metrics exporter BEFORE tokio runtime starts
+    // This is critical to avoid "Cannot drop a runtime" errors
+    if let Err(e) = crate::controller::metrics::init_prometheus_exporter() {
+        eprintln!("Warning: Failed to initialize Prometheus metrics exporter: {}", e);
+        eprintln!("Metrics endpoint will not be available");
+    }
+    
+    // Now start the async runtime
+    tokio::runtime::Runtime::new()
+        .context("Failed to create tokio runtime")?
+        .block_on(async_main(args))
+}
+
+async fn async_main(args: Args) -> Result<()> {
 
     // Create cancellation token for graceful shutdown
     let shutdown_token = CancellationToken::new();

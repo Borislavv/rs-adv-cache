@@ -18,7 +18,7 @@ Grafana (порт 3000) - визуализирует метрики
 
 ```bash
 # Запустить все сервисы (Prometheus, Grafana)
-docker compose up -d prometheus grafana
+docker-compose up -d prometheus grafana
 
 # Проверить статус
 docker compose ps
@@ -78,10 +78,10 @@ scrape_configs:
 
 ### Если приложение запущено в Docker
 
-Если AdvCache также запущен в docker compose, измените target на:
+Если AdvCache также запущен в docker-compose, измените target на:
 
 ```yaml
-targets: ['advcache:8020']  # имя сервиса из docker compose
+targets: ['advcache:8020']  # имя сервиса из docker-compose
 ```
 
 И добавьте `advcache` в ту же сеть:
@@ -207,14 +207,14 @@ Dashboard автоматически импортируется из:
 
 3. Проверить логи Prometheus:
    ```bash
-   docker compose logs prometheus
+   docker-compose logs prometheus
    ```
 
 ### Grafana не видит Prometheus
 
 1. Проверить, что Prometheus запущен:
    ```bash
-   docker compose ps prometheus
+   docker-compose ps prometheus
    curl http://localhost:9090/api/v1/status/config
    ```
 
@@ -224,7 +224,7 @@ Dashboard автоматически импортируется из:
 
 3. Проверить логи Grafana:
    ```bash
-   docker compose logs grafana
+   docker-compose logs grafana
    ```
 
 ### Метрики не отображаются в Dashboard
@@ -255,10 +255,10 @@ Dashboard автоматически импортируется из:
 
 ```bash
 # Остановить все
-docker compose down
+docker-compose down
 
 # Остановить с удалением volumes (удалит данные Prometheus и Grafana)
-docker compose down -v
+docker-compose down -v
 ```
 
 ## Дополнительная информация
