@@ -24,6 +24,7 @@ static AVG_TOTAL_DURATION: AtomicU64 = AtomicU64::new(0);
 static AVG_CACHE_DURATION: AtomicU64 = AtomicU64::new(0);
 static AVG_PROXY_DURATION: AtomicU64 = AtomicU64::new(0);
 static AVG_ERROR_DURATION: AtomicU64 = AtomicU64::new(0);
+static CPU_USAGE_CORES: AtomicU64 = AtomicU64::new(0);
 
 // Eviction metrics
 static SOFT_EVICTIONS: AtomicU64 = AtomicU64::new(0);
@@ -101,6 +102,11 @@ pub fn set_avg_response_time(total_dur: f64, cache_dur: f64, proxy_dur: f64, err
     AVG_CACHE_DURATION.store(cache_dur.to_bits(), Ordering::Relaxed);
     AVG_PROXY_DURATION.store(proxy_dur.to_bits(), Ordering::Relaxed);
     AVG_ERROR_DURATION.store(err_dur.to_bits(), Ordering::Relaxed);
+}
+
+/// Sets CPU usage in cores (number of CPU cores utilized).
+pub fn set_cpu_usage_cores(cores: f64) {
+    CPU_USAGE_CORES.store(cores.to_bits(), Ordering::Relaxed);
 }
 
 /// Adds soft eviction statistics.
@@ -194,6 +200,10 @@ fn format_prometheus_metrics() -> String {
     output.push_str(&format!("# HELP avg_error_duration_ns Average error duration in nanoseconds\n"));
     output.push_str(&format!("# TYPE avg_error_duration_ns gauge\n"));
     output.push_str(&format!("avg_error_duration_ns {}\n", f64::from_bits(AVG_ERROR_DURATION.load(Ordering::Relaxed))));
+    
+    output.push_str(&format!("# HELP cpu_usage_cores CPU usage in cores (number of CPU cores utilized)\n"));
+    output.push_str(&format!("# TYPE cpu_usage_cores gauge\n"));
+    output.push_str(&format!("cpu_usage_cores {}\n", f64::from_bits(CPU_USAGE_CORES.load(Ordering::Relaxed))));
     
     // Eviction metrics
     output.push_str(&format!("# HELP soft_evicted_total_items Total items evicted by soft eviction\n"));
