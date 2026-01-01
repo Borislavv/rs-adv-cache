@@ -19,6 +19,7 @@ static PANICKED_REQUESTS: AtomicU64 = AtomicU64::new(0);
 // Gauges (f64 stored as u64 bits for atomic operations)
 static RPS: AtomicU64 = AtomicU64::new(0);
 static CACHE_MEMORY_USAGE: AtomicU64 = AtomicU64::new(0);
+static PROCESS_PHYSICAL_MEMORY_USAGE: AtomicU64 = AtomicU64::new(0);
 static CACHE_LENGTH: AtomicU64 = AtomicU64::new(0);
 static AVG_TOTAL_DURATION: AtomicU64 = AtomicU64::new(0);
 static AVG_CACHE_DURATION: AtomicU64 = AtomicU64::new(0);
@@ -66,9 +67,14 @@ pub fn set_rps(value: f64) {
     RPS.store(value.to_bits(), Ordering::Relaxed);
 }
 
-/// Sets cache memory usage.
+/// Sets cache memory usage (logical memory used by cache data structures).
 pub fn set_cache_memory(bytes: u64) {
     CACHE_MEMORY_USAGE.store(bytes, Ordering::Relaxed);
+}
+
+/// Sets process physical memory usage (RSS - Resident Set Size from system).
+pub fn set_process_physical_memory(bytes: u64) {
+    PROCESS_PHYSICAL_MEMORY_USAGE.store(bytes, Ordering::Relaxed);
 }
 
 /// Increments total requests counter.
@@ -177,9 +183,13 @@ fn format_prometheus_metrics() -> String {
     output.push_str(&format!("# TYPE rps gauge\n"));
     output.push_str(&format!("rps {}\n", f64::from_bits(RPS.load(Ordering::Relaxed))));
     
-    output.push_str(&format!("# HELP cache_memory_usage Cache memory usage in bytes\n"));
+    output.push_str(&format!("# HELP cache_memory_usage Cache logical memory usage in bytes (memory used by cache data structures)\n"));
     output.push_str(&format!("# TYPE cache_memory_usage gauge\n"));
     output.push_str(&format!("cache_memory_usage {}\n", CACHE_MEMORY_USAGE.load(Ordering::Relaxed)));
+    
+    output.push_str(&format!("# HELP process_physical_memory_usage Process physical memory usage in bytes (RSS - Resident Set Size from system)\n"));
+    output.push_str(&format!("# TYPE process_physical_memory_usage gauge\n"));
+    output.push_str(&format!("process_physical_memory_usage {}\n", PROCESS_PHYSICAL_MEMORY_USAGE.load(Ordering::Relaxed)));
     
     output.push_str(&format!("# HELP cache_length Number of items in cache\n"));
     output.push_str(&format!("# TYPE cache_length gauge\n"));

@@ -5,7 +5,7 @@
 
 -- ===== Tunables (can be overridden via env) =====
 local i_min   = tonumber(os.getenv("I_MIN") or "1")
-local i_max   = tonumber(os.getenv("I_MAX") or "25000")
+local i_max   = tonumber(os.getenv("I_MAX") or "250000")
 
 local language   = os.getenv("LANGUAGE") or "en"
 local domain     = os.getenv("DOMAIN") or "advcache.example.com"
@@ -39,13 +39,15 @@ function init(args)
 end
 
 -- ===== Helpers =====
-local function build_query(i)
-  return
-    "?user[id]=" .. user_id ..
+-- Pre-build query prefix to reduce string concatenation
+local query_prefix = "?user[id]=" .. user_id ..
     "&domain=" .. domain ..
     "&language=" .. language ..
-    "&picked=" .. picked .. "_" .. i ..
-    "&timezone=" .. timezone
+    "&picked=" .. picked .. "_"
+local query_suffix = "&timezone=" .. timezone
+
+local function build_query(i)
+  return query_prefix .. i .. query_suffix
 end
 
 -- precalc cumulative cutoffs to avoid float drift
@@ -72,7 +74,11 @@ end
 
 local cut = normalize_weights()
 
--- ===== Request generator =====
+-- ===== Pre-generated 1KB data for query parameter (1024 bytes) =====
+-- Pre-allocated constant to avoid any runtime generation
+local DATA_1KB = string.rep("0123456789ABCDEF", 64)  -- 64 * 16 = 1024 bytes
+
+-- ===== Optimized request generator =====
 request = function()
   local i = math.random(i_min, i_max)
   local q = build_query(i)
@@ -89,5 +95,8 @@ request = function()
     path = "/api/v1/buyer" .. q
   end
 
-  return wrk.format("GET", path, headers)
+  -- Add 1KB data as query parameter
+  local full_path = path .. "&data=" .. DATA_1KB
+
+  return wrk.format("GET", full_path, headers)
 end

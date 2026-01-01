@@ -13,7 +13,7 @@ use std::time::{Duration, Instant};
 use tokio::time::interval;
 use tokio_util::sync::CancellationToken;
 use tracing::info;
-use sysinfo::System;
+use sysinfo::{System, Pid};
 
 use crate::config::{Config, ConfigTrait};
 use crate::dedlog;
@@ -456,12 +456,13 @@ impl CacheProxyController {
             interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
             let mut prev = time::now();
             
-            // Initialize CPU monitoring
+            // Initialize CPU monitoring for current process
             let mut sys = System::new();
+            let current_pid = Pid::from_u32(std::process::id());
+            sys.refresh_processes();
             sys.refresh_cpu();
             // Wait a bit for accurate CPU readings
             tokio::time::sleep(Duration::from_millis(100)).await;
-            let num_cores = num_cpus::get() as f64;
 
             loop {
                 tokio::select! {
@@ -539,11 +540,26 @@ impl CacheProxyController {
                         metrics::set_avg_response_time(avg_duration, cache_avg_duration, proxy_avg_duration, errors_avg_duration);
                         metrics::set_rps(rps);
                         
-                        // Update CPU usage in cores
+                        // Update CPU usage in cores for current process only
+                        sys.refresh_processes();
                         sys.refresh_cpu();
-                        let cpu_usage_percent = sys.global_cpu_info().cpu_usage() as f64;
-                        let cpu_usage_cores = (cpu_usage_percent / 100.0) * num_cores;
-                        metrics::set_cpu_usage_cores(cpu_usage_cores);
+                        
+                        // Get CPU usage and memory for current process
+                        // process.cpu_usage() returns percentage that can exceed 100% on multi-core systems
+                        // If process uses 100% of 1 core on 6-core system: returns 100%
+                        // If process uses 100% of all 6 cores: returns 600%
+                        // So we divide by 100 to get number of cores utilized
+                        if let Some(process) = sys.process(current_pid) {
+                            let cpu_usage_cores = process.cpu_usage() as f64 / 100.0;
+                            metrics::set_cpu_usage_cores(cpu_usage_cores);
+                            
+                            // Get physical memory (RSS - Resident Set Size) in bytes
+                            let physical_memory_bytes = process.memory();
+                            metrics::set_process_physical_memory(physical_memory_bytes);
+                        } else {
+                            metrics::set_cpu_usage_cores(0.0);
+                            metrics::set_process_physical_memory(0);
+                        }
                         
                         // Note: Counters (hits, misses, total, errors, proxied) are now updated
                         // in real-time when events occur. Local counters are reset here for

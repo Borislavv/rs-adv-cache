@@ -49,7 +49,7 @@
         "type": "prometheus",
         "uid": "${datasource}"
       },
-      "description": "hits per second (looks like RPS)",
+      "description": "",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -204,7 +204,7 @@
           "refId": "F"
         }
       ],
-      "title": "RPS & hits & misses & errors & panics",
+      "title": "HITs & MISSes & ERRORS & PANICS",
       "type": "timeseries"
     },
     {
@@ -652,7 +652,7 @@
           "refId": "F"
         }
       ],
-      "title": "Hit rate",
+      "title": "HIT rate",
       "type": "timeseries"
     },
     {
@@ -842,7 +842,7 @@
           "editorMode": "code",
           "expr": "cache_memory_usage",
           "instant": false,
-          "legendFormat": "Memory usage",
+          "legendFormat": "Cache logical memory",
           "range": true,
           "refId": "A"
         },
@@ -852,10 +852,10 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "process_resident_memory_bytes",
+          "expr": "process_physical_memory_usage",
           "hide": false,
           "instant": false,
-          "legendFormat": "Process memory usage",
+          "legendFormat": "Process physical memory (RSS)",
           "range": true,
           "refId": "B"
         },
@@ -865,10 +865,10 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "process_resident_memory_bytes - cache_memory_usage",
+          "expr": "process_physical_memory_usage - cache_memory_usage",
           "hide": false,
           "instant": false,
-          "legendFormat": "Overhead (logical - physical memory)",
+          "legendFormat": "Overhead (physical - logical)",
           "range": true,
           "refId": "C"
         },
@@ -944,7 +944,8 @@
                 "value": 80
               }
             ]
-          }
+          },
+          "unit": "cores"
         },
         "overrides": []
       },
@@ -954,17 +955,22 @@
         "x": 12,
         "y": 16
       },
-      "id": 104,
+      "id": 61,
       "options": {
         "legend": {
-          "calcs": [],
-          "displayMode": "list",
+          "calcs": [
+            "min",
+            "max",
+            "mean"
+          ],
+          "displayMode": "table",
           "placement": "bottom",
           "showLegend": true
         },
         "tooltip": {
           "hideZeros": false,
-          "mode": "single",
+          "maxHeight": 600,
+          "mode": "multi",
           "sort": "none"
         }
       },
@@ -976,9 +982,8 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "rate(refresh_scans[1m])",
-          "instant": false,
-          "legendFormat": "Scans (total)",
+          "expr": "sum(rate(process_cpu_seconds_total{namespace=\"$namespace\",pod=~\"$deployment.*\"}[$__rate_interval])) by (pod)",
+          "legendFormat": "{{pod}} (process)",
           "range": true,
           "refId": "A"
         },
@@ -988,54 +993,15 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "rate(refresh_updated[1m])",
+          "expr": "cpu_usage_cores",
           "hide": false,
           "instant": false,
-          "legendFormat": "Affected/Updated items",
+          "legendFormat": "Application CPU (cores)",
           "range": true,
           "refId": "B"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${datasource}"
-          },
-          "editorMode": "code",
-          "expr": "rate(refresh_hits[1m])",
-          "hide": false,
-          "instant": false,
-          "legendFormat": "Scans: hits (expired found)",
-          "range": true,
-          "refId": "C"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${datasource}"
-          },
-          "editorMode": "code",
-          "expr": "rate(refresh_miss[1m])",
-          "hide": false,
-          "instant": false,
-          "legendFormat": "Scans: miss (no expired)",
-          "range": true,
-          "refId": "D"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${datasource}"
-          },
-          "editorMode": "code",
-          "expr": "rate(refresh_errors[1m])",
-          "hide": false,
-          "instant": false,
-          "legendFormat": "Errors",
-          "range": true,
-          "refId": "E"
         }
       ],
-      "title": "Lifetimer (Data Refresher): Scans, Affected Items, Hits/Misses",
+      "title": "CPU usage",
       "type": "timeseries"
     },
     {
@@ -1268,8 +1234,7 @@
                 "value": 80
               }
             ]
-          },
-          "unit": "s"
+          }
         },
         "overrides": []
       },
@@ -1279,22 +1244,17 @@
         "x": 12,
         "y": 24
       },
-      "id": 61,
+      "id": 104,
       "options": {
         "legend": {
-          "calcs": [
-            "min",
-            "max",
-            "mean"
-          ],
-          "displayMode": "table",
+          "calcs": [],
+          "displayMode": "list",
           "placement": "bottom",
           "showLegend": true
         },
         "tooltip": {
           "hideZeros": false,
-          "maxHeight": 600,
-          "mode": "multi",
+          "mode": "single",
           "sort": "none"
         }
       },
@@ -1306,8 +1266,9 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "sum(rate(process_cpu_seconds_total{namespace=\"$namespace\",pod=~\"$deployment.*\"}[$__rate_interval])) by (pod)",
-          "legendFormat": "{{pod}} (process)",
+          "expr": "rate(refresh_scans[1m])",
+          "instant": false,
+          "legendFormat": "Scans (total)",
           "range": true,
           "refId": "A"
         },
@@ -1317,15 +1278,54 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "cpu_usage_cores",
+          "expr": "rate(refresh_updated[1m])",
           "hide": false,
           "instant": false,
-          "legendFormat": "Application CPU (cores)",
+          "legendFormat": "Affected/Updated items",
           "range": true,
           "refId": "B"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "editorMode": "code",
+          "expr": "rate(refresh_hits[1m])",
+          "hide": false,
+          "instant": false,
+          "legendFormat": "Scans: hits (expired found)",
+          "range": true,
+          "refId": "C"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "editorMode": "code",
+          "expr": "rate(refresh_miss[1m])",
+          "hide": false,
+          "instant": false,
+          "legendFormat": "Scans: miss (no expired)",
+          "range": true,
+          "refId": "D"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "editorMode": "code",
+          "expr": "rate(refresh_errors[1m])",
+          "hide": false,
+          "instant": false,
+          "legendFormat": "Errors",
+          "range": true,
+          "refId": "E"
         }
       ],
-      "title": "CPU usage",
+      "title": "Lifetimer (Data Refresher): Scans, Affected Items, Hits/Misses",
       "type": "timeseries"
     }
   ],
@@ -1358,13 +1358,13 @@
     ]
   },
   "time": {
-    "from": "now-15m",
+    "from": "now-5m",
     "to": "now"
   },
   "timepicker": {},
   "timezone": "",
   "title": "AdvCache Metrics",
   "uid": "advcache-main",
-  "version": 14,
+  "version": 24,
   "weekStart": ""
 }
