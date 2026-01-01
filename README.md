@@ -2,12 +2,12 @@
 
 [![Rust Version](https://img.shields.io/static/v1?label=Rust&message=1.82%2B&logo=rust&color=000000)](https://www.rust-lang.org/tools/install) [![Coverage](https://img.shields.io/codecov/c/github/Borislavv/rs-adv-cache?label=coverage)](https://codecov.io/gh/Borislavv/adv-cache) [![License](https://img.shields.io/badge/License-Apache--2.0-green.svg)](./LICENSE)
 
-**AdvCache** is a high-performance, production-ready in-memory HTTP cache and reverse proxy designed for latency-sensitive workloads. Built with Rust using `tokio` and `axum`, it delivers exceptional throughput (175-300k RPS) with minimal memory overhead and zero-allocation hot paths.
+**AdvCache** is a high-performance, production-ready in-memory HTTP cache and reverse proxy designed for latency-sensitive workloads. Built with Rust using `tokio` and `axum`, it delivers exceptional throughput (165-300k RPS) with minimal memory overhead and zero-allocation hot paths.
 
 ## 🚀 Key Features
 
 ### Performance & Scalability
-- **High Throughput**: 175k RPS locally, up to 300k RPS on 24-core bare-metal servers
+- **High Throughput**: 165k RPS locally, up to 300k RPS on 24-core bare-metal servers
 - **Memory Efficient**: Only 3-4GB overhead for 40GB of cached data
 - **Sharded Storage**: 1024 shards with per-shard LRU for optimal lock contention reduction
 
@@ -352,7 +352,7 @@ Complete API documentation is available via Swagger/OpenAPI specification at `ap
 
 ### Benchmark Results
 
-- **Local (4-6 CPU, 1-16KB docs, 20-25GB store)**: 175k RPS steady
+- **Local (4-6 CPU, 1-16KB docs, 20-25GB store)**: 165k RPS steady
 - **Bare-metal (24 CPU, 50GB store, production traffic)**: ~300k RPS sustained
 - **Memory Overhead**: 3-4GB for 40GB of cached data
 
