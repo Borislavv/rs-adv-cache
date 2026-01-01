@@ -149,9 +149,14 @@ fn main() -> Result<()> {
     
     // Initialize Prometheus metrics exporter BEFORE tokio runtime starts
     // This is critical to avoid "Cannot drop a runtime" errors
-    if let Err(e) = crate::controller::metrics::init_prometheus_exporter() {
-        eprintln!("Warning: Failed to initialize Prometheus metrics exporter: {}", e);
-        eprintln!("Metrics endpoint will not be available");
+    match crate::controller::metrics::init_prometheus_exporter() {
+        Ok(_) => {
+            eprintln!("Info: Prometheus metrics exporter initialized successfully");
+        }
+        Err(e) => {
+            eprintln!("Warning: Failed to initialize Prometheus metrics exporter: {}", e);
+            eprintln!("Metrics endpoint will not be available");
+        }
     }
     
     // Now start the async runtime

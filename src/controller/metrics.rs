@@ -22,30 +22,46 @@ static PROMETHEUS_HANDLE: OnceLock<metrics_exporter_prometheus::PrometheusHandle
 /// before any async operations start.
 pub fn init_prometheus_exporter() -> anyhow::Result<()> {
     use metrics_exporter_prometheus::PrometheusBuilder;
-    use metrics::set_boxed_recorder;
+    use std::net::SocketAddr;
     
-    // Build the recorder first to get a handle for rendering
-    // In version 0.6, we use build() to get PrometheusRecorder
-    // Then we can get handle from it before installing
+    // In version 0.6, install() requires either listen_address or push_gateway_config.
+    // We want to use our own /metrics endpoint via axum, so we:
+    // 1. Build a recorder first to get a handle
+    // 2. Install a new recorder with a dummy listen_address (which we won't use)
+    // 3. The handle from step 1 will work because both use the same default registry
+    //
+    // Note: We set listen_address to avoid the "must specify at least one" error,
+    // but we disable the HTTP listener, so it won't actually bind to that address.
+    
+    // Build the recorder first to get a handle
     let builder = PrometheusBuilder::new();
     let recorder = builder.build();
     
-    // Get handle from the recorder before installing
-    // PrometheusRecorder should have a method to get handle
-    // Try to access handle through the recorder
+    // Get handle from the recorder BEFORE installing
     let handle = recorder.handle();
     
-    // Install the recorder as the global recorder
-    // We use set_boxed_recorder instead of install() to avoid runtime creation
-    // But PrometheusRecorder doesn't implement Recorder trait directly
-    // So we need to use install() which sets it up correctly
+    // Install a new recorder with HTTP listener disabled
+    // We need to provide listen_address to satisfy install() requirements,
+    // but disable_http_listener() prevents it from actually binding
+    let dummy_addr: SocketAddr = "127.0.0.1:0".parse()
+        .map_err(|e| anyhow::anyhow!("Failed to parse dummy address: {}", e))?;
+    
     PrometheusBuilder::new()
+        .listen_address(dummy_addr) // Required by install(), but won't be used due to disable_http_listener()
+        .disable_http_listener() // Disable built-in HTTP server - we use our own endpoint
         .install()
         .map_err(|e| anyhow::anyhow!("Failed to install Prometheus recorder: {}", e))?;
     
-    // Store the handle for later use in rendering
+    // Store the handle for rendering metrics later
+    // The handle from our built recorder will work because both recorders
+    // built from PrometheusBuilder::new() share the same default registry
     PROMETHEUS_HANDLE.set(handle)
         .map_err(|_| anyhow::anyhow!("Prometheus handle already initialized"))?;
+    
+    // Verify handle was stored
+    if PROMETHEUS_HANDLE.get().is_none() {
+        return Err(anyhow::anyhow!("Failed to store Prometheus handle - set() returned Ok but get() is None"));
+    }
     
     Ok(())
 }
@@ -76,19 +92,26 @@ impl PrometheusMetricsController {
         // Check if we have a handle
         if let Some(handle) = PROMETHEUS_HANDLE.get() {
             // Render metrics using the handle
+            let metrics_text = handle.render();
             return (
                 StatusCode::OK,
                 [("content-type", "text/plain; charset=utf-8")],
-                handle.render(),
+                metrics_text,
             );
         }
         
-        // Fallback: return a message indicating metrics are being collected
-        // The recorder is installed and working, but we can't render without a handle
-        let metrics_text = "# Metrics are being collected\n# The recorder is installed and working\n# Metrics will be available once recorded\n# To see actual metrics, use Prometheus to scrape this endpoint\n# Full rendering requires a handle from build() before install()\n".to_string();
+        // Fallback: return a message indicating handle is not available
+        // This means init_prometheus_exporter() either wasn't called or failed
+        let metrics_text = format!(
+            "# ERROR: Prometheus handle not initialized\n\
+             # Handle is None: {}\n\
+             # Please ensure init_prometheus_exporter() is called at startup\n\
+             # and that it completes successfully\n",
+            PROMETHEUS_HANDLE.get().is_none()
+        );
 
         (
-            StatusCode::OK,
+            StatusCode::SERVICE_UNAVAILABLE,
             [("content-type", "text/plain; charset=utf-8")],
             metrics_text,
         )
