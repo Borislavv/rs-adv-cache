@@ -21,6 +21,7 @@ use crate::http::query::filter_and_sort_request as filter_and_sort_queries;
 use crate::http::render::renderer;
 use crate::http::Controller;
 use crate::http::{is_compression_enabled, panics_counter};
+use crate::controller::metrics;
 use crate::metrics as prom_metrics;
 use crate::metrics::policy::Policy as LifetimePolicy;
 use crate::model::{
@@ -98,6 +99,8 @@ impl CacheProxyController {
     ) -> Response {
         let start = Instant::now();
         TOTAL.fetch_add(1, Ordering::Relaxed);
+        // Update metrics in real-time
+        metrics::inc_total(1);
 
         // Extract request information
         let uri = request.uri();
@@ -173,6 +176,7 @@ impl CacheProxyController {
                 Err(CacheError::NeedRetryThroughProxy) => {
                     path_kind = PathKind::Proxy;
                     PROXIED.fetch_add(1, Ordering::Relaxed);
+                    metrics::inc_proxied(1);
                     controller
                         .handle_through_proxy(
                             path,
@@ -188,6 +192,7 @@ impl CacheProxyController {
         } else {
             path_kind = PathKind::Proxy;
             PROXIED.fetch_add(1, Ordering::Relaxed);
+            metrics::inc_proxied(1);
             controller
                 .handle_through_proxy(path, query_str, &request_headers, request.method().as_str(), &request_str)
                 .await
@@ -201,8 +206,9 @@ impl CacheProxyController {
                 DURATION.fetch_add(elapsed, Ordering::Relaxed);
                 ERROR_DURATION.fetch_add(elapsed, Ordering::Relaxed);
                 ERRORED.fetch_add(1, Ordering::Relaxed);
+                metrics::inc_errors(1);
                 let status_code = StatusCode::SERVICE_UNAVAILABLE.as_u16();
-                prom_metrics::inc_status_code(status_code);
+                metrics::inc_status_code(status_code);
 
                 // Set tracing attributes for error case
                 if let Some(ref s) = span {
@@ -227,7 +233,7 @@ impl CacheProxyController {
             .unwrap_or(0);
 
         // Record status code metric
-        prom_metrics::inc_status_code(status_code);
+        metrics::inc_status_code(status_code);
 
         // Update duration metrics
         DURATION.fetch_add(elapsed, Ordering::Relaxed);
@@ -289,6 +295,7 @@ impl CacheProxyController {
         if hit {
             if let Some(cache_entry) = cache_entry_opt {
                 HITS.fetch_add(1, Ordering::Relaxed);
+                metrics::inc_cache_hits(1);
 
                 let cache_key = cache_entry.key();
                 return match renderer::write_from_entry(&cache_entry) {
@@ -302,6 +309,7 @@ impl CacheProxyController {
         }
 
         MISSES.fetch_add(1, Ordering::Relaxed);
+        metrics::inc_cache_misses(1);
 
         let cache_key = request_entry.key();
         
@@ -396,6 +404,7 @@ impl CacheProxyController {
         if code >= 500 {
             dedlog::err(None, Some(request_str), ERR_MSG_UPSTREAM_INTERNAL_ERROR);
             ERRORED.fetch_add(1, Ordering::Relaxed);
+            metrics::inc_errors(1);
         }
     }
 
@@ -458,6 +467,8 @@ impl CacheProxyController {
                         let misses_num = MISSES.swap(0, Ordering::Relaxed);
                         let proxied_num = PROXIED.swap(0, Ordering::Relaxed);
                         let errors_num = ERRORED.swap(0, Ordering::Relaxed);
+                        // Panics counter is updated in real-time via inc_panics() in middleware
+                        // when panics occur. We read it here only for logging.
                         let panics = panics_counter() as i64;
                         let total_duration_num = DURATION.swap(0, Ordering::Relaxed);
                         let cache_duration_num = CACHE_DURATION.swap(0, Ordering::Relaxed);
@@ -514,17 +525,17 @@ impl CacheProxyController {
                             cfg.admission().map(|a| a.is_enabled.load(Ordering::Relaxed)).unwrap_or(false)
                         );
                         prom_metrics::set_is_traces_active(traces::is_active_tracing());
-                        prom_metrics::set_cache_length(length as u64);
-                        prom_metrics::set_cache_memory(mem_usage as u64);
-                        prom_metrics::add_hits(hits_num as u64);
-                        prom_metrics::add_misses(misses_num as u64);
-                        prom_metrics::add_total(total_num as u64);
-                        prom_metrics::add_errors(errors_num as u64);
-                        prom_metrics::add_proxied_num(proxied_num as u64);
-                        prom_metrics::add_panics(panics as u64);
-                        prom_metrics::set_avg_response_time(avg_duration, cache_avg_duration, proxy_avg_duration, errors_avg_duration);
-                        prom_metrics::set_rps(rps);
-                        prom_metrics::flush_status_code_counters();
+                        // Update gauges (absolute values that change over time)
+                        metrics::set_cache_length(length as u64);
+                        metrics::set_cache_memory(mem_usage as u64);
+                        metrics::set_avg_response_time(avg_duration, cache_avg_duration, proxy_avg_duration, errors_avg_duration);
+                        metrics::set_rps(rps);
+                        
+                        // Note: Counters (hits, misses, total, errors, proxied) are now updated
+                        // in real-time when events occur. Local counters are reset here for
+                        // rate calculation (RPS) and logging, but metrics remain accumulated.
+                        // Status codes are also updated in real-time via inc_status_code().
+                        // Panics counter is tracked separately in middleware and read here for logging.
 
                         if cfg.is_enabled() {
                             let hit_rate = if hits_num + misses_num > 0 {

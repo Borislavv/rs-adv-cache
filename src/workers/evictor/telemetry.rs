@@ -8,18 +8,21 @@ use std::sync::Arc;
 
 /// Logs eviction statistics and updates metrics.
 pub fn log_stats(name: &str, counters: &Arc<Counters>) {
+    // Swap counters to get values and reset them (prevents double-counting)
     let items = counters
         .evicted_items
-        .load(std::sync::atomic::Ordering::Relaxed);
+        .swap(0, std::sync::atomic::Ordering::Relaxed);
     let bytes = counters
         .evicted_bytes
-        .load(std::sync::atomic::Ordering::Relaxed);
+        .swap(0, std::sync::atomic::Ordering::Relaxed);
     let scans = counters
         .scans_total
-        .load(std::sync::atomic::Ordering::Relaxed);
+        .swap(0, std::sync::atomic::Ordering::Relaxed);
 
-    // Update metrics
-    meter::add_soft_eviction_stat_counters(bytes, items, scans);
+    // Update metrics with accumulated values
+    if items > 0 || bytes > 0 || scans > 0 {
+        meter::add_soft_eviction_stat_counters(bytes, items, scans);
+    }
 
     // Log if there's activity
     if items > 0 || bytes > 0 {

@@ -1,7 +1,7 @@
 use super::policy::Policy;
+use crate::controller::metrics;
 use crate::upstream::Policy as UpstreamPolicy;
 
-// Metric name constants
 pub const AVG_TOTAL_DURATION: &str = "avg_duration_ns";
 pub const AVG_CACHE_DURATION: &str = "avg_cache_duration_ns";
 pub const AVG_PROXY_DURATION: &str = "avg_proxy_duration_ns";
@@ -41,102 +41,89 @@ pub const IS_COMPRESSION_ACTIVE: &str = "is_compression_active";
 pub const IS_TRACES_ACTIVE: &str = "is_traces_active";
 pub const IS_ADMISSION_ACTIVE: &str = "is_admission_active";
 
-
 /// Adds cache hits.
 pub fn add_hits(value: u64) {
-    metrics::counter!(HITS, value);
+    metrics::inc_cache_hits(value);
 }
 
 /// Adds cache misses.
 pub fn add_misses(value: u64) {
-    metrics::counter!(MISSES, value);
+    metrics::inc_cache_misses(value);
 }
 
 /// Sets requests per second.
 pub fn set_rps(value: f64) {
-    metrics::gauge!(RPS, value);
+    metrics::set_rps(value);
 }
 
 /// Sets cache memory usage.
 pub fn set_cache_memory(bytes: u64) {
-    // Use gauge for absolute values (memory usage)
-    metrics::gauge!(MAP_MEMORY_USAGE_METRIC_NAME, bytes as f64);
+    metrics::set_cache_memory(bytes);
 }
 
 /// Adds total requests.
 pub fn add_total(value: u64) {
-    metrics::counter!(TOTAL, value);
+    metrics::inc_total(value);
 }
 
 /// Adds errors.
 pub fn add_errors(value: u64) {
-    metrics::counter!(ERRORED, value);
+    metrics::inc_errors(value);
 }
 
 /// Adds panics.
 pub fn add_panics(value: u64) {
-    metrics::counter!(PANICKED, value);
+    metrics::inc_panics(value);
 }
 
 /// Adds proxied requests.
 pub fn add_proxied_num(value: u64) {
-    metrics::counter!(PROXIED, value);
+    metrics::inc_proxied(value);
 }
 
 /// Sets cache length.
 pub fn set_cache_length(count: u64) {
-    // Use gauge for set operations (absolute values)
-    metrics::gauge!(MAP_LENGTH, count as f64);
+    metrics::set_cache_length(count);
 }
 
 /// Sets backend policy.
-pub fn set_backend_policy(p: UpstreamPolicy) {
-    metrics::gauge!(BACKEND_POLICY, p.to_u64() as f64);
+pub fn set_backend_policy(_p: UpstreamPolicy) {
+    // Backend policy is not tracked in simple metrics
 }
 
 /// Sets lifetime policy.
-pub fn set_lifetime_policy(p: Policy) {
-    metrics::gauge!(LIFETIME_POLICY, p.to_u64() as f64);
+pub fn set_lifetime_policy(_p: Policy) {
+    // Lifetime policy is not tracked in simple metrics
 }
 
 /// Sets bypass active status.
-pub fn set_is_bypass_active(is_cache_active: bool) {
-    let is_bypass = if !is_cache_active { 1.0 } else { 0.0 };
-    metrics::gauge!(IS_BYPASS_ACTIVE, is_bypass);
+pub fn set_is_bypass_active(_is_cache_active: bool) {
+    // Bypass status is not tracked in simple metrics
 }
 
 /// Sets compression active status.
-pub fn set_is_compression_active(is_active: bool) {
-    let is_compression = if is_active { 1.0 } else { 0.0 };
-    metrics::gauge!(IS_COMPRESSION_ACTIVE, is_compression);
+pub fn set_is_compression_active(_is_active: bool) {
+    // Compression status is not tracked in simple metrics
 }
 
 /// Sets admission active status.
-pub fn set_is_admission_active(is_active: bool) {
-    let is_admission_active = if is_active { 1.0 } else { 0.0 };
-    metrics::gauge!(IS_ADMISSION_ACTIVE, is_admission_active);
+pub fn set_is_admission_active(_is_active: bool) {
+    // Admission status is not tracked in simple metrics
 }
 
 /// Sets tracing active status.
-pub fn set_is_traces_active(is_active: bool) {
-    let is_traces_active = if is_active { 1.0 } else { 0.0 };
-    metrics::gauge!(IS_TRACES_ACTIVE, is_traces_active);
+pub fn set_is_traces_active(_is_active: bool) {
+    // Tracing status is not tracked in simple metrics
 }
 
 /// Sets average response times.
 pub fn set_avg_response_time(total_dur: f64, cache_dur: f64, proxy_dur: f64, err_dur: f64) {
-    metrics::gauge!(AVG_TOTAL_DURATION, total_dur);
-    metrics::gauge!(AVG_CACHE_DURATION, cache_dur);
-    metrics::gauge!(AVG_PROXY_DURATION, proxy_dur);
-    metrics::gauge!(AVG_ERROR_DURATION, err_dur);
+    metrics::set_avg_response_time(total_dur, cache_dur, proxy_dur, err_dur);
 }
-
 
 /// Adds soft eviction statistics.
 pub fn add_soft_eviction_stat_counters(bytes: i64, items: i64, scans: i64) {
-    metrics::counter!(TOTAL_SOFT_EVICTIONS, items as u64);
-    metrics::counter!(TOTAL_SOFT_BYTES_EVICTED, bytes as u64);
-    metrics::counter!(TOTAL_SOFT_SCANS, scans as u64);
+    metrics::add_soft_eviction_stats(bytes as u64, items as u64, scans as u64);
 }
 
 /// Adds hard eviction statistics.
@@ -146,17 +133,21 @@ pub fn add_hard_eviction_stat_counters(
     adm_allowed: i64,
     adm_not_allowed: i64,
 ) {
-    metrics::counter!(TOTAL_HARD_EVICTIONS, items as u64);
-    metrics::counter!(TOTAL_HARD_BYTES_EVICTED, bytes as u64);
-    metrics::counter!(TOTAL_ADM_ALLOWED, adm_allowed as u64);
-    metrics::counter!(TOTAL_ADM_NOT_ALLOWED, adm_not_allowed as u64);
+    metrics::add_hard_eviction_stats(
+        bytes as u64,
+        items as u64,
+        adm_allowed as u64,
+        adm_not_allowed as u64,
+    );
 }
 
 /// Adds lifetime statistics.
 pub fn add_lifetime_stat_counters(updated: i64, errors: i64, scans: i64, miss: i64, hits: i64) {
-    metrics::counter!(REFRESHER_UPDATED, updated as u64);
-    metrics::counter!(REFRESHER_ERRORS, errors as u64);
-    metrics::counter!(REFRESHER_SCANS, scans as u64);
-    metrics::counter!(REFRESHER_HITS, hits as u64);
-    metrics::counter!(REFRESHER_MISS, miss as u64);
+    metrics::add_lifetime_stats(
+        updated as u64,
+        errors as u64,
+        scans as u64,
+        miss as u64,
+        hits as u64,
+    );
 }

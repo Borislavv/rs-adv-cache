@@ -12,6 +12,14 @@ pub fn panics_counter() -> u64 {
     PANICS_COUNTER.load(Ordering::Relaxed)
 }
 
+/// Increments the panic counter.
+/// Should be called when a panic is caught.
+pub fn inc_panics() {
+    PANICS_COUNTER.fetch_add(1, Ordering::Relaxed);
+    // Also update metrics in real-time
+    crate::controller::metrics::inc_panics(1);
+}
+
 /// PanicRecoverMiddleware recovers from panics in HTTP handlers.
 pub struct PanicRecoverMiddleware;
 
