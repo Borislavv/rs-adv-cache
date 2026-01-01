@@ -1312,7 +1312,7 @@
           "refId": "A"
         }
       ],
-      "title": "Общее количество секунд, которые были потрачены процессом на использование процессора",
+      "title": "CPU usage",
       "type": "timeseries"
     }
   ],
@@ -1345,13 +1345,13 @@
     ]
   },
   "time": {
-    "from": "now-1h",
+    "from": "now-15m",
     "to": "now"
   },
   "timepicker": {},
   "timezone": "",
   "title": "AdvCache Metrics",
   "uid": "advcache-main",
-  "version": 12,
+  "version": 14,
   "weekStart": ""
 }
