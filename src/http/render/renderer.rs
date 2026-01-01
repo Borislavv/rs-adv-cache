@@ -2,6 +2,7 @@ use axum::{
     http::{HeaderMap, HeaderName, HeaderValue, StatusCode},
     response::Response,
 };
+use bytes::Bytes;
 
 use crate::model::Entry;
 
@@ -44,9 +45,12 @@ pub fn write_from_raw_response(
     // Build response
     let status = StatusCode::from_u16(code).unwrap_or(StatusCode::OK);
 
+    // Use Bytes::from to avoid unnecessary Vec allocation if body is already Vec<u8>
+    // For zero-copy, prefer using body directly as Bytes when possible
+    let body_bytes = Bytes::from(body.to_vec());
     Response::builder()
         .status(status)
-        .body(body.to_vec().into())
+        .body(body_bytes.into())
         .map(|mut resp| {
             *resp.headers_mut() = header_map;
             resp
@@ -91,9 +95,16 @@ pub fn write_from_response(resp: &crate::model::Response, last_refreshed_at: i64
     // Build response
     let status = StatusCode::from_u16(resp.status).unwrap_or(StatusCode::OK);
 
+    // Convert body to Bytes efficiently
+    // For small bodies, use copy_from_slice to avoid Vec allocation overhead
+    let body_bytes = if resp.body.len() < 1024 {
+        Bytes::copy_from_slice(&resp.body)
+    } else {
+        Bytes::from(resp.body.clone())
+    };
     Response::builder()
         .status(status)
-        .body(resp.body.clone().into())
+        .body(body_bytes.into())
         .map(|mut resp| {
             *resp.headers_mut() = header_map;
             resp

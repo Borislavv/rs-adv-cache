@@ -3,6 +3,7 @@
 
 use std::sync::Arc;
 use byteorder::{ByteOrder, LittleEndian};
+use bytes::Bytes;
 
 use super::{Entry, Response};
 
@@ -55,7 +56,9 @@ impl Entry {
 
         buf.shrink_to_fit();
         
-        self.0.payload.store(Some(Arc::new(buf)));
+        // Convert Vec<u8> to Bytes - no copy, just moves ownership
+        let bytes = Bytes::from(buf);
+        self.0.payload.store(Some(Arc::new(bytes)));
     }
 
     /// Packs queries into the buffer.

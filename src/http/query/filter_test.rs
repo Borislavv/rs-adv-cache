@@ -28,7 +28,7 @@ mod tests {
         let rule = make_rule_with_query_keys(vec!["user[id]", "domain"]);
         let query_str = "user[id]=123&domain=example.com&ignored=value&another=param";
 
-        let result = filter_and_sort_request(Some(&rule), query_str);
+        let result = filter_and_sort_request(Some(&rule), query_str.as_bytes());
 
         assert_eq!(result.len(), 2);
         assert!(result.iter().any(|(k, v)| k == b"user[id]" && v == b"123"));
@@ -43,7 +43,7 @@ mod tests {
         let rule = make_rule_with_query_keys(vec!["zebra", "alpha", "middle"]);
         let query_str = "zebra=z&alpha=a&middle=m";
 
-        let result = filter_and_sort_request(Some(&rule), query_str);
+        let result = filter_and_sort_request(Some(&rule), query_str.as_bytes());
 
         assert_eq!(result.len(), 3);
         // Should be sorted lexicographically by key
@@ -57,7 +57,7 @@ mod tests {
     fn test_filter_no_rule() {
         let query_str = "user[id]=123&domain=example.com";
 
-        let result = filter_and_sort_request(None, query_str);
+        let result = filter_and_sort_request(None, query_str.as_bytes());
 
         assert_eq!(result.len(), 0);
     }
@@ -68,7 +68,7 @@ mod tests {
         let rule = make_rule_with_query_keys(vec![]);
         let query_str = "user[id]=123&domain=example.com";
 
-        let result = filter_and_sort_request(Some(&rule), query_str);
+        let result = filter_and_sort_request(Some(&rule), query_str.as_bytes());
 
         assert_eq!(result.len(), 0);
     }
@@ -79,7 +79,7 @@ mod tests {
         let rule = make_rule_with_query_keys(vec!["user[id]"]);
         let query_str = "user[id]=123"; // No leading '?'
 
-        let result = filter_and_sort_request(Some(&rule), query_str);
+        let result = filter_and_sort_request(Some(&rule), query_str.as_bytes());
 
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].0, b"user[id]");
@@ -92,7 +92,7 @@ mod tests {
         let rule = make_rule_with_query_keys(vec!["user[id]"]);
         let query_str = "?user[id]=123"; // With leading '?'
 
-        let result = filter_and_sort_request(Some(&rule), query_str);
+        let result = filter_and_sort_request(Some(&rule), query_str.as_bytes());
 
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].0, b"user[id]");
@@ -105,7 +105,7 @@ mod tests {
         let rule = make_rule_with_query_keys(vec!["domain"]);
         let query_str = "domain=example%2Ecom%20with%20spaces";
 
-        let result = filter_and_sort_request(Some(&rule), query_str);
+        let result = filter_and_sort_request(Some(&rule), query_str.as_bytes());
 
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].0, b"domain");
@@ -119,7 +119,7 @@ mod tests {
         let rule = make_rule_with_query_keys(vec!["user[id]"]);
         let query_str = "user[id]=123&user[id]=456";
 
-        let result = filter_and_sort_request(Some(&rule), query_str);
+        let result = filter_and_sort_request(Some(&rule), query_str.as_bytes());
 
         // url::form_urlencoded::parse returns all pairs, including duplicates
         assert_eq!(result.len(), 2);
@@ -133,7 +133,7 @@ mod tests {
         let rule = make_rule_with_query_keys(vec!["user[id]", "domain"]);
         let query_str = "user[id]=&domain=example.com";
 
-        let result = filter_and_sort_request(Some(&rule), query_str);
+        let result = filter_and_sort_request(Some(&rule), query_str.as_bytes());
 
         assert_eq!(result.len(), 2);
         let id_entry = result.iter().find(|(k, _)| k == b"user[id]").unwrap();
@@ -148,7 +148,7 @@ mod tests {
         let rule = make_rule_with_query_keys(vec!["user[id]", "Domain"]);
         let query_str = "user[id]=123&Domain=example.com&domain=ignored";
 
-        let result = filter_and_sort_request(Some(&rule), query_str);
+        let result = filter_and_sort_request(Some(&rule), query_str.as_bytes());
 
         assert_eq!(result.len(), 2);
         assert!(result.iter().any(|(k, v)| k == b"user[id]" && v == b"123"));
@@ -163,7 +163,7 @@ mod tests {
         let rule = make_rule_with_query_keys(vec!["user[id]"]);
         let query_str = "user[id]=123";
 
-        let result = filter_and_sort_request(Some(&rule), query_str);
+        let result = filter_and_sort_request(Some(&rule), query_str.as_bytes());
 
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].0, b"user[id]");

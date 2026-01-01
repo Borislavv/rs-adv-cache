@@ -68,12 +68,13 @@ pub trait Upstream: Send + Sync {
     ) -> Result<Response>;
 
     /// Proxies a request to the upstream backend.
+    /// Accepts headers as byte slices to avoid String allocations.
     async fn proxy_request(
         &self,
         method: &str,
         path: &str,
         query: &str,
-        headers: &[(String, String)],
+        headers: &[(Vec<u8>, Vec<u8>)],
         body: Option<&[u8]>,
     ) -> Result<Response>;
 

@@ -91,7 +91,7 @@ impl Upstream for CountingUpstream {
         _method: &str,
         _path: &str,
         _query: &str,
-        _headers: &[(String, String)],
+        _headers: &[(Vec<u8>, Vec<u8>)],
         _body: Option<&[u8]>,
     ) -> anyhow::Result<Response> {
         Ok(Response::new(200, vec![], b"ok".to_vec()))

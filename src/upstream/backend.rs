@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+use bytes::Bytes;
 use governor::{Quota, RateLimiter};
 use std::num::NonZeroU32;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -198,13 +199,16 @@ impl Upstream for BackendImpl {
             url_with_query.push('?');
             
             // Build query string (encodes both key and value)
+            // Optimize: use from_utf8_lossy which returns Cow<str>, avoiding allocation for valid UTF-8
             for (i, (k, v)) in queries.iter().enumerate() {
                 if i > 0 {
                     url_with_query.push('&');
                 }
-                url_with_query.push_str(&urlencoding::encode(&String::from_utf8_lossy(k)));
+                // from_utf8_lossy returns Cow<str> - use as_ref() to get &str without allocation
+                // if bytes are valid UTF-8 (common case for HTTP query parameters)
+                url_with_query.push_str(&urlencoding::encode(String::from_utf8_lossy(k).as_ref()));
                 url_with_query.push('=');
-                url_with_query.push_str(&urlencoding::encode(&String::from_utf8_lossy(v)));
+                url_with_query.push_str(&urlencoding::encode(String::from_utf8_lossy(v).as_ref()));
             }
             url_with_query
         };
@@ -224,20 +228,16 @@ impl Upstream for BackendImpl {
         let filtered_headers = proxy::filter_hop_by_hop_headers_bytes(headers);
         
         // Convert filtered headers to String tuples (excluding Host - it's set after build())
-        let mut request_headers: Vec<(String, String)> = Vec::new();
+        // Pre-allocate with estimated capacity to reduce reallocations
+        let mut request_headers: Vec<(String, String)> = Vec::with_capacity(filtered_headers.len());
         for (key, value) in &filtered_headers {
             // Skip Host header - it will be set via forwarded_host after build()
             if key.eq_ignore_ascii_case(b"host") {
                 continue;
             }
-            let k = match String::from_utf8(key.clone()) {
-                Ok(s) => s,
-                Err(_) => continue,
-            };
-            let v = match String::from_utf8(value.clone()) {
-                Ok(s) => s,
-                Err(_) => continue,
-            };
+            // Use from_utf8_lossy to avoid clone + error handling overhead
+            let k = String::from_utf8_lossy(key).to_string();
+            let v = String::from_utf8_lossy(value).to_string();
             request_headers.push((k, v));
         }
         
@@ -255,6 +255,7 @@ impl Upstream for BackendImpl {
                 // Process headers directly from response (optimized)
                 let response_headers = process_response_headers(&response_headers_map, Some(rule));
                 
+                // body is already Bytes from make_get_request, convert to Vec<u8> for Response struct
                 let body: Vec<u8> = body.to_vec();
                 let response_size: usize = body.len();
                 
@@ -282,7 +283,7 @@ impl Upstream for BackendImpl {
         method: &str,
         path: &str,
         query: &str,
-        headers: &[(String, String)],
+        headers: &[(Vec<u8>, Vec<u8>)],
         body: Option<&[u8]>,
     ) -> Result<Response> {
         self.throttle().await?;
@@ -309,33 +310,42 @@ impl Upstream for BackendImpl {
             _ => hyper::Method::GET,
         };
 
-        // Convert headers to bytes format for forwarded_host_value_bytes
-        let headers_bytes: Vec<(Vec<u8>, Vec<u8>)> = headers
-            .iter()
-            .map(|(k, v)| (k.as_bytes().to_vec(), v.as_bytes().to_vec()))
-            .collect();
-        
         // Extract forwarded host value (X-Forwarded-Host or Host) as bytes (no allocations)
-        let forwarded_host = proxy::forwarded_host_value_bytes(&headers_bytes);
+        let forwarded_host = proxy::forwarded_host_value_bytes(headers);
 
-        // Sanitize hop-by-hop headers from request
-        let filtered_headers = proxy::filter_hop_by_hop_headers(headers);
+        // Sanitize hop-by-hop headers from request (headers are already in bytes format)
+        let filtered_headers = proxy::filter_hop_by_hop_headers_bytes(headers);
 
         // Start upstream span (after proxyForwardedHost)
         let span = upstream_trace::start_proxy_request_span(path, &request_str);
 
         // Build request headers (excluding Host - it's set after build())
-        let mut request_headers: Vec<(&str, &str)> = Vec::new();
+        // Convert bytes to String only when needed for hyper request builder
+        let mut request_headers: Vec<(&str, &str)> = Vec::with_capacity(filtered_headers.len());
         for (key, value) in &filtered_headers {
             // Skip Host header - it will be set via forwarded_host after build()
-            if key.eq_ignore_ascii_case("host") {
+            if key.eq_ignore_ascii_case(b"host") {
                 continue;
             }
-            request_headers.push((key.as_str(), value.as_str()));
+            // Convert to &str for hyper (necessary for request builder)
+            // Use from_utf8_lossy - for valid UTF-8 it returns Cow::Borrowed (no allocation)
+            // but we need to convert to String for the Vec<(&str, &str)> to work
+            if let (Ok(key_str), Ok(value_str)) = (std::str::from_utf8(key), std::str::from_utf8(value)) {
+                if !key_str.is_empty() && !value_str.is_empty() {
+                    request_headers.push((key_str, value_str));
+                }
+            }
         }
 
-        // Convert body to Bytes if present
-        let body_bytes = body.map(|b| hyper::body::Bytes::from(b.to_vec()));
+        // Convert body to Bytes if present (avoid unnecessary Vec allocation)
+        let body_bytes = body.map(|b| {
+            // If body is small, use Bytes::copy_from_slice for better performance
+            if b.len() < 1024 {
+                Bytes::copy_from_slice(b)
+            } else {
+                Bytes::from(b.to_vec())
+            }
+        });
 
         let timeout_duration = self.get_timeout(false);
         

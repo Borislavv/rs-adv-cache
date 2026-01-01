@@ -91,7 +91,7 @@ impl InvalidateController {
         }
         let query_str = serializer.finish();
 
-        let filtered_queries = filter_and_sort_request(Some(&*rule), &query_str);
+        let filtered_queries = filter_and_sort_request(Some(&*rule), query_str.as_bytes());
 
         // Determine if we should remove entries (check for _remove query param)
         let should_remove = params.contains_key(REMOVE_SPECIAL);

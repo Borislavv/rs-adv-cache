@@ -8,7 +8,8 @@ mod tests {
     fn make_rule_with_header_keys(keys: Vec<&str>) -> Rule {
         let mut headers_map = HashMap::new();
         for key in &keys {
-            headers_map.insert(key.to_string(), vec![]);
+            // headers_map stores lowercase key -> original header name bytes
+            headers_map.insert(key.to_lowercase(), key.as_bytes().to_vec());
         }
 
         Rule {
@@ -33,10 +34,10 @@ mod tests {
     fn test_filter_only_whitelisted() {
         let rule = make_rule_with_header_keys(vec!["accept-encoding", "content-type"]);
         let headers = vec![
-            ("Accept-Encoding".to_string(), "gzip".to_string()),
-            ("Content-Type".to_string(), "application/json".to_string()),
-            ("X-Custom".to_string(), "ignored".to_string()),
-            ("Authorization".to_string(), "token".to_string()),
+            (b"Accept-Encoding".to_vec(), b"gzip".to_vec()),
+            (b"Content-Type".to_vec(), b"application/json".to_vec()),
+            (b"X-Custom".to_vec(), b"ignored".to_vec()),
+            (b"Authorization".to_vec(), b"token".to_vec()),
         ];
 
         let result = filter_and_sort_request(Some(&rule), &headers);
@@ -54,9 +55,9 @@ mod tests {
     fn test_filter_case_insensitive_matching() {
         let rule = make_rule_with_header_keys(vec!["accept-encoding"]);
         let headers = vec![
-            ("Accept-Encoding".to_string(), "gzip".to_string()),
-            ("ACCEPT-ENCODING".to_string(), "deflate".to_string()),
-            ("accept-encoding".to_string(), "br".to_string()),
+            (b"Accept-Encoding".to_vec(), b"gzip".to_vec()),
+            (b"ACCEPT-ENCODING".to_vec(), b"deflate".to_vec()),
+            (b"accept-encoding".to_vec(), b"br".to_vec()),
         ];
 
         let result = filter_and_sort_request(Some(&rule), &headers);
@@ -73,9 +74,9 @@ mod tests {
     fn test_filter_sorts_results() {
         let rule = make_rule_with_header_keys(vec!["zebra", "alpha", "middle"]);
         let headers = vec![
-            ("Zebra".to_string(), "z".to_string()),
-            ("Alpha".to_string(), "a".to_string()),
-            ("Middle".to_string(), "m".to_string()),
+            (b"Zebra".to_vec(), b"z".to_vec()),
+            (b"Alpha".to_vec(), b"a".to_vec()),
+            (b"Middle".to_vec(), b"m".to_vec()),
         ];
 
         let result = filter_and_sort_request(Some(&rule), &headers);
@@ -92,7 +93,7 @@ mod tests {
     #[test]
     fn test_filter_no_rule() {
         let headers = vec![
-            ("Accept-Encoding".to_string(), "gzip".to_string()),
+            (b"Accept-Encoding".to_vec(), b"gzip".to_vec()),
         ];
 
         let result = filter_and_sort_request(None, &headers);
@@ -105,7 +106,7 @@ mod tests {
     fn test_filter_empty_whitelist() {
         let rule = make_rule_with_header_keys(vec![]);
         let headers = vec![
-            ("Accept-Encoding".to_string(), "gzip".to_string()),
+            (b"Accept-Encoding".to_vec(), b"gzip".to_vec()),
         ];
 
         let result = filter_and_sort_request(Some(&rule), &headers);
@@ -118,7 +119,7 @@ mod tests {
     fn test_filter_preserves_value_case() {
         let rule = make_rule_with_header_keys(vec!["accept-encoding"]);
         let headers = vec![
-            ("Accept-Encoding".to_string(), "gZip, DeFlaTe".to_string()),
+            (b"Accept-Encoding".to_vec(), b"gZip, DeFlaTe".to_vec()),
         ];
 
         let result = filter_and_sort_request(Some(&rule), &headers);
@@ -134,8 +135,8 @@ mod tests {
     fn test_filter_duplicate_headers() {
         let rule = make_rule_with_header_keys(vec!["accept-encoding"]);
         let headers = vec![
-            ("Accept-Encoding".to_string(), "gzip".to_string()),
-            ("Accept-Encoding".to_string(), "deflate".to_string()),
+            (b"Accept-Encoding".to_vec(), b"gzip".to_vec()),
+            (b"Accept-Encoding".to_vec(), b"deflate".to_vec()),
         ];
 
         let result = filter_and_sort_request(Some(&rule), &headers);
@@ -152,8 +153,8 @@ mod tests {
     fn test_filter_empty_values() {
         let rule = make_rule_with_header_keys(vec!["x-custom", "x-empty"]);
         let headers = vec![
-            ("X-Custom".to_string(), "value".to_string()),
-            ("X-Empty".to_string(), "".to_string()),
+            (b"X-Custom".to_vec(), b"value".to_vec()),
+            (b"X-Empty".to_vec(), b"".to_vec()),
         ];
 
         let result = filter_and_sort_request(Some(&rule), &headers);
@@ -172,7 +173,7 @@ mod tests {
     fn test_filter_single_entry_no_sort() {
         let rule = make_rule_with_header_keys(vec!["accept-encoding"]);
         let headers = vec![
-            ("Accept-Encoding".to_string(), "gzip".to_string()),
+            (b"Accept-Encoding".to_vec(), b"gzip".to_vec()),
         ];
 
         let result = filter_and_sort_request(Some(&rule), &headers);
@@ -188,7 +189,7 @@ mod tests {
     fn test_filter_special_characters() {
         let rule = make_rule_with_header_keys(vec!["x-custom"]);
         let headers = vec![
-            ("X-Custom".to_string(), "value\nwith\tspecial\rchars".to_string()),
+            (b"X-Custom".to_vec(), b"value\nwith\tspecial\rchars".to_vec()),
         ];
 
         let result = filter_and_sort_request(Some(&rule), &headers);

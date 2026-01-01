@@ -5,7 +5,7 @@
 
 -- ===== Tunables (can be overridden via env) =====
 local i_min   = tonumber(os.getenv("I_MIN") or "1")
-local i_max   = tonumber(os.getenv("I_MAX") or "250000")
+local i_max   = tonumber(os.getenv("I_MAX") or "2500000")
 
 local language   = os.getenv("LANGUAGE") or "en"
 local domain     = os.getenv("DOMAIN") or "advcache.example.com"

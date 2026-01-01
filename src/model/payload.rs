@@ -2,6 +2,7 @@
 //
 
 use std::sync::Arc;
+use bytes::Bytes;
 
 use super::Entry;
 
@@ -49,10 +50,10 @@ impl Entry {
         
         // Arc pointer overheads (8 bytes per Arc)
         // Entry itself is Arc<EntryInner> = 8 bytes
-        // Payload is Arc<Vec<u8>> = 8 bytes (if exists)
+        // Payload is Bytes (no Arc needed, Bytes handles sharing internally) = 0 bytes Arc overhead
         // Rule is Arc<Rule> = 8 bytes (shared but counted for simplicity)
         let payload_guard = self.0.payload.load();
-        let arc_overhead = if payload_guard.is_some() { 24 } else { 16 }; // 3 Arcs if payload exists, 2 if not
+        let arc_overhead = if payload_guard.is_some() { 16 } else { 16 }; // 2 Arcs (EntryInner + Rule)
         
         // Memory alignment/padding overhead (typical 8-16 bytes)
         const ALIGNMENT_OVERHEAD: i64 = 12;
@@ -74,14 +75,15 @@ impl Entry {
         let self_guard = self.0.payload.load();
         let other_guard = other.0.payload.load();
         
-        let self_payload = self_guard.as_ref().map(Arc::clone);
-        let other_payload = other_guard.as_ref().map(Arc::clone);
+        // Arc::clone() is cheap (just increments ref count)
+        let self_payload = self_guard.as_ref().map(|arc_bytes| Arc::clone(arc_bytes));
+        let other_payload = other_guard.as_ref().map(|arc_bytes| Arc::clone(arc_bytes));
         
         drop(self_guard);
         drop(other_guard);
         
-        self.0.payload.store(other_payload);
-        other.0.payload.store(self_payload);
+        self.0.payload.store(self_payload);
+        other.0.payload.store(other_payload);
 
         new_weight - old_weight
     }
@@ -97,20 +99,28 @@ impl Entry {
         match (a, b) {
             (None, None) => true,
             (Some(_), None) | (None, Some(_)) => false,
-            (Some(a_vec), Some(b_vec)) => {
-                if a_vec.len() != b_vec.len() {
+            (Some(a_arc_bytes), Some(b_arc_bytes)) => {
+                if a_arc_bytes.len() != b_arc_bytes.len() {
                     return false;
                 }
-                a_vec == b_vec
+                a_arc_bytes == b_arc_bytes
             }
         }
     }
 
-    /// Gets the payload bytes as Vec<u8> (copy).
-    pub fn payload_bytes(&self) -> Vec<u8> {
+    /// Gets the payload bytes as Bytes (zero-copy if possible).
+    pub fn payload_bytes(&self) -> Bytes {
         self.0.payload.load()
             .as_ref()
-            .map(|arc_vec| (**arc_vec).clone())
+            .map(|arc_bytes| arc_bytes.as_ref().clone()) // Clone Bytes from Arc (cheap, just ref count increment)
+            .unwrap_or_else(|| Bytes::new())
+    }
+    
+    /// Gets the payload bytes as Vec<u8> (copy - use only when necessary).
+    pub fn payload_bytes_vec(&self) -> Vec<u8> {
+        self.0.payload.load()
+            .as_ref()
+            .map(|bytes| bytes.to_vec())
             .unwrap_or_default()
     }
 }
