@@ -481,9 +481,6 @@ impl CacheProxyController {
                         let misses_num = MISSES.swap(0, Ordering::Relaxed);
                         let proxied_num = PROXIED.swap(0, Ordering::Relaxed);
                         let errors_num = ERRORED.swap(0, Ordering::Relaxed);
-                        // Panics counter is updated in real-time via inc_panics() in middleware
-                        // when panics occur. We read it here only for logging.
-                        let _panics = panics_counter() as i64;
                         let total_duration_num = DURATION.swap(0, Ordering::Relaxed);
                         let cache_duration_num = CACHE_DURATION.swap(0, Ordering::Relaxed);
                         let proxy_duration_num = PROXY_DURATION.swap(0, Ordering::Relaxed);
