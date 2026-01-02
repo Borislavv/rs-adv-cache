@@ -169,6 +169,9 @@ impl Storage {
             self.remove(entry);
             Ok(())
         } else {
+            // Capture weight before refresh to calculate delta
+            let old_weight = entry.weight();
+            
             self.upstream.refresh(entry).await.map_err(
                 |e| -> Box<dyn std::error::Error + Send + Sync> {
                     Box::new(std::io::Error::new(
@@ -176,7 +179,17 @@ impl Storage {
                         format!("{}", e),
                     ))
                 },
-            )
+            )?;
+            
+            // Update memory counter after payload change
+            // weight() uses capacity(), which may change after set_payload()
+            let new_weight = entry.weight();
+            let bytes_delta = new_weight - old_weight;
+            if bytes_delta != 0 {
+                self.shareded_hash_map.add_mem(entry.key(), bytes_delta);
+            }
+            
+            Ok(())
         }
     }
 
