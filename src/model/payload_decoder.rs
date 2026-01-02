@@ -1,7 +1,6 @@
 //! Payload decoding functionality.
 
 use byteorder::{ByteOrder, LittleEndian};
-use bytes::Bytes;
 
 use super::payload_encoder::*;
 use super::{Entry, Payload, RequestPayload, ResponsePayload};
@@ -58,13 +57,13 @@ impl Entry {
 
         Ok(ResponsePayload {
             headers,
-            body: body.to_vec(), // Convert Bytes to Vec<u8> for compatibility
+            body,
             code,
         })
     }
 
     /// Unpacks queries from the payload.
-    fn unpack_queries(&self, data: &Bytes) -> Result<Vec<(Vec<u8>, Vec<u8>)>, PayloadError> {
+    fn unpack_queries(&self, data: &[u8]) -> Result<Vec<(Vec<u8>, Vec<u8>)>, PayloadError> {
         let offset_from = LittleEndian::read_u32(&data[OFF_QUERY..OFF_QUERY + OFF_WEIGHT]) as usize;
         let offset_to =
             LittleEndian::read_u32(&data[OFF_REQ_HDRS..OFF_REQ_HDRS + OFF_WEIGHT]) as usize;
@@ -136,7 +135,7 @@ impl Entry {
     }
 
     /// Unpacks status code from the payload.
-    fn unpack_status_code(&self, data: &Bytes) -> Result<u16, PayloadError> {
+    fn unpack_status_code(&self, data: &[u8]) -> Result<u16, PayloadError> {
         let offset_from =
             LittleEndian::read_u32(&data[OFF_STATUS..OFF_STATUS + OFF_WEIGHT]) as usize;
         let offset_to = offset_from + OFF_WEIGHT;
@@ -189,7 +188,7 @@ impl Entry {
     }
 
     /// Unpacks response body from the payload.
-    fn unpack_response_body(&self, data: &Bytes) -> Result<Bytes, PayloadError> {
+    fn unpack_response_body(&self, data: &[u8]) -> Result<Vec<u8>, PayloadError> {
         let body_offset = LittleEndian::read_u32(&data[OFF_BODY..OFF_BODY + OFF_WEIGHT]) as usize;
 
         if body_offset + OFF_WEIGHT > data.len() {
@@ -205,27 +204,27 @@ impl Entry {
             return Err(PayloadError::CorruptedResponseBodySection);
         }
 
-        // Zero-copy slice from Bytes
-        Ok(data.slice(offset_from..offset_to))
+        Ok(data[offset_from..offset_to].to_vec())
     }
 
-    /// Gets the payload data, checking for validity (returns Bytes - zero-copy).
-    fn get_payload_data(&self) -> Result<bytes::Bytes, PayloadError> {
+    /// Gets the payload data, checking for validity (returns Vec<u8> copy).
+    fn get_payload_data(&self) -> Result<Vec<u8>, PayloadError> {
         let payload_guard = self.0.payload.load();
-        let arc_bytes = match payload_guard.as_ref() {
-            Some(arc_bytes) => arc_bytes,
+        let arc_vec = match payload_guard.as_ref() {
+            Some(arc_vec) => arc_vec,
             None => return Err(PayloadError::MalformedOrNilPayload),
         };
         
-        if arc_bytes.is_empty() {
+        let data = &**arc_vec;
+        if data.is_empty() {
             return Err(PayloadError::MalformedOrNilPayload);
         }
         
-        if arc_bytes.len() < OFFSETS_MAP_SIZE {
+        if data.len() < OFFSETS_MAP_SIZE {
             return Err(PayloadError::MalformedOrNilPayload);
         }
         
-        // Clone Bytes from Arc (cheap, just ref count increment)
-        Ok(arc_bytes.as_ref().clone())
+        // Clone Vec<u8> (copy, but simple and guaranteed single source)
+        Ok(data.clone())
     }
 }

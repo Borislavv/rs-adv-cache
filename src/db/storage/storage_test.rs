@@ -29,7 +29,7 @@ mod tests {
             _method: &str,
             _path: &str,
             _query: &str,
-            _headers: &[(Vec<u8>, Vec<u8>)],
+            _headers: &[(String, String)],
             _body: Option<&[u8]>,
         ) -> Result<crate::upstream::Response, anyhow::Error> {
             Err(anyhow::anyhow!("not implemented"))

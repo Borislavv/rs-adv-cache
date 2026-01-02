@@ -2,7 +2,6 @@
 
 use std::sync::atomic::{AtomicBool, AtomicI64};
 use std::sync::Arc;
-use bytes::Bytes;
 
 use crate::config::Rule;
 
@@ -49,10 +48,9 @@ pub struct EntryInner {
     pub(crate) fingerprint_hi: u64,
     pub(crate) fingerprint_lo: u64,
     pub(crate) rule: Arc<Rule>,
-    // Payload stored as Bytes - zero-copy, no capacity overhead, efficient cloning
+    // Payload stored as Vec<u8> - simple, no overhead, guaranteed single copy
     // Use ArcSwapOption for atomic updates without locks, Option allows empty payload
-    // ArcSwapOption wraps the value in Arc internally, so we store Bytes directly
-    pub(crate) payload: arc_swap::ArcSwapOption<Bytes>,
+    pub(crate) payload: arc_swap::ArcSwapOption<Vec<u8>>,
     pub(crate) touched_at: AtomicI64,
     pub(crate) updated_at: AtomicI64,
     pub(crate) refresh_queued: AtomicBool,
@@ -108,7 +106,7 @@ impl Entry {
         // Create new EntryInner with updated rule
         use std::sync::atomic::Ordering;
         let payload_guard = self.0.payload.load();
-        let payload_clone = payload_guard.as_ref().map(|arc_bytes| Arc::clone(arc_bytes)); // Arc::clone() is cheap
+        let payload_clone = payload_guard.as_ref().map(|arc_vec| Arc::clone(arc_vec));
         let inner = EntryInner {
             key: self.0.key,
             fingerprint_hi: self.0.fingerprint_hi,
@@ -206,7 +204,7 @@ impl Entry {
         let payload_opt = if payload.is_empty() {
             None
         } else {
-            Some(Arc::new(Bytes::from(payload)))
+            Some(Arc::new(payload))
         };
         let inner = EntryInner {
             key,

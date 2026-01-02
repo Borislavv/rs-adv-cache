@@ -163,7 +163,5 @@ pub async fn make_method_request(
         .context("Failed to read response body")?
         .to_bytes();
     
-    // Convert Bytes to Vec<u8> for Response struct
-    // Bytes::to_vec() is efficient (moves if single owner, copies if shared)
     Ok((status, headers, body_bytes.to_vec()))
 }

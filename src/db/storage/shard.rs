@@ -77,12 +77,9 @@ pub struct Shard<V: Value> {
 impl<V: Value> Shard<V> {
     /// Creates a new shard.
     pub fn new(id: u64) -> Self {
-        // Pre-allocate HashMap with initial capacity to reduce reallocations
-        // Typical shard will have hundreds to thousands of entries
-        const INITIAL_CAPACITY: usize = 256;
         Self {
             data: RwLock::new(ShardData {
-                items: HashMap::with_capacity(INITIAL_CAPACITY),
+                items: HashMap::new(),
                 lru: None,
                 lru_on: false,
             }),

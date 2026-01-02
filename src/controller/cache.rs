@@ -108,26 +108,23 @@ impl CacheProxyController {
         let path = uri.path();
         let path_bytes = path.as_bytes();
 
-        // Extract headers as bytes directly (avoid String allocations)
-        // Note: We need to collect headers for filtering, but we can work with bytes
+        // Extract headers
+        // Note: HeaderName::to_string() returns lowercase, but we preserve original case via as_str()
         let mut request_headers = Vec::new();
         for (k, v) in request.headers() {
-            if let Ok(v_bytes) = v.to_str() {
-                // Store as bytes to avoid String allocations
-                request_headers.push((k.as_str().as_bytes().to_vec(), v_bytes.as_bytes().to_vec()));
+            if let Ok(v_str) = v.to_str() {
+                // Use as_str() to get the original header name (axum normalizes to lowercase)
+                // But for comparison, we use eq_ignore_ascii_case anyway
+                let header_name = k.as_str().to_string();
+                request_headers.push((header_name, v_str.to_string()));
             }
         }
 
         // Extract query string
         let query_str = uri.query().unwrap_or("");
 
-        // Build request string representation for tracing (lazy - only if tracing enabled)
-        let tracing_enabled = traces::is_active_tracing();
-        let request_str = if tracing_enabled {
-            format!("{} {} {:?}", request.method(), uri, request.version())
-        } else {
-            String::new() // Empty string if tracing disabled
-        };
+        // Build request string representation for tracing
+        let request_str = format!("{} {} {:?}", request.method(), uri, request.version());
 
         let tracing_enabled = traces::is_active_tracing();
 
@@ -266,7 +263,7 @@ impl CacheProxyController {
         &self,
         path_bytes: &[u8],
         query_str: &str,
-        request_headers: &[(Vec<u8>, Vec<u8>)], // Changed from (String, String) to (Vec<u8>, Vec<u8>)
+        request_headers: &[(String, String)],
         _method: &str,
         request_str: &str,
     ) -> Result<(Response, bool, bool, u64), CacheError> {
@@ -283,17 +280,15 @@ impl CacheProxyController {
 
         // Extract forwarded_host from original headers BEFORE filtering.
         // This ensures X-Forwarded-Host and Host are available even if not in cache key whitelist.
-        // request_headers is already Vec<(Vec<u8>, Vec<u8>)>, so no conversion needed
-        let forwarded_host = crate::upstream::proxy::forwarded_host_value_bytes(request_headers);
+        let headers_bytes_for_forwarded: Vec<(Vec<u8>, Vec<u8>)> = request_headers
+            .iter()
+            .map(|(k, v)| (k.as_bytes().to_vec(), v.as_bytes().to_vec()))
+            .collect();
+        let forwarded_host = crate::upstream::proxy::forwarded_host_value_bytes(&headers_bytes_for_forwarded);
         
-        // Filter and sort headers directly from bytes (no String conversion)
         let headers_bytes = filter_and_sort_headers(Some(&rule), request_headers);
-        // Convert query_str to bytes for filter_and_sort_queries (avoids String allocation in function)
-        let queries_bytes = filter_and_sort_queries(Some(&rule), query_str.as_bytes());
+        let queries_bytes = filter_and_sort_queries(Some(&rule), query_str);
 
-        // Save headers_bytes copy for later use (set_payload needs it)
-        let headers_bytes_for_payload = headers_bytes.clone();
-        
         let request_entry = crate::model::Entry::new(rule.clone(), queries_bytes.as_ref(), headers_bytes.as_ref());
 
         let (cache_entry_opt, hit) = self.cache.get(&request_entry);
@@ -321,14 +316,11 @@ impl CacheProxyController {
         
         // Add forwarded_host to headers_bytes so it's available in request().
         // This ensures Host header is passed to upstream even if not in cache key whitelist.
-        // Use headers_bytes_for_payload since headers_bytes was moved into request_entry
-        let headers_bytes_with_host = if let Some(host_bytes) = forwarded_host {
-            let mut h = headers_bytes_for_payload.clone();
-            h.push((b"host".to_vec(), host_bytes.to_vec()));
-            h
-        } else {
-            headers_bytes_for_payload.clone() // Clone needed since we use it for request
-        };
+        // Note: We clone headers_bytes because it was moved into request_entry above.
+        let mut headers_bytes_with_host = headers_bytes.clone();
+        if let Some(host_bytes) = forwarded_host {
+            headers_bytes_with_host.push((b"host".to_vec(), host_bytes.to_vec()));
+        }
         
         let upstream_resp = match self
             .upstream
@@ -342,16 +334,15 @@ impl CacheProxyController {
             }
         };
 
-        // Create ModelResponse once and reuse it (avoid double cloning)
-        let model_resp = ModelResponse {
-            status: upstream_resp.status,
-            headers: upstream_resp.headers.clone(),
-            body: upstream_resp.body.clone(),
-        };
-
         let mut refreshed_at = 0i64;
         if upstream_resp.status == 200 {
-            request_entry.set_payload(&queries_bytes, &headers_bytes_for_payload, &model_resp);
+            let model_response = ModelResponse {
+                status: upstream_resp.status,
+                headers: upstream_resp.headers.clone(),
+                body: upstream_resp.body.clone(),
+            };
+
+            request_entry.set_payload(&queries_bytes, &headers_bytes, &model_response);
 
             if self.cache.set(request_entry) {
                 refreshed_at = time::unix_nano();
@@ -360,6 +351,11 @@ impl CacheProxyController {
             self.log_on_err_status_code(upstream_resp.status, request_str);
         }
 
+        let model_resp = ModelResponse {
+            status: upstream_resp.status,
+            headers: upstream_resp.headers.clone(),
+            body: upstream_resp.body.clone(),
+        };
         let response = renderer::write_from_response(&model_resp, refreshed_at);
 
         Ok((response, false, false, cache_key))
@@ -370,11 +366,10 @@ impl CacheProxyController {
         &self,
         path: &str,
         query_str: &str,
-        request_headers: &[(Vec<u8>, Vec<u8>)], // Changed from (String, String) to (Vec<u8>, Vec<u8>)
+        request_headers: &[(String, String)],
         method: &str,
         request_str: &str,
     ) -> Result<(Response, bool, bool, u64), CacheError> {
-        // Pass headers directly as bytes (no String conversion)
         let upstream_resp = match self
             .upstream
             .proxy_request(

@@ -150,189 +150,129 @@ pub fn inc_status_code(code: u16) {
 }
 
 /// Formats metrics in Prometheus format.
-/// Optimized to reduce String allocations by using push_str with to_string() for numbers.
 fn format_prometheus_metrics() -> String {
-    // Pre-allocate String with estimated capacity (typical metrics output is ~2-4KB)
-    let mut output = String::with_capacity(4096);
+    let mut output = String::new();
     
     // Counters
-    output.push_str("# HELP cache_hits Total number of cache hits\n");
-    output.push_str("# TYPE cache_hits counter\n");
-    output.push_str("cache_hits ");
-    output.push_str(&CACHE_HITS.load(Ordering::Relaxed).to_string());
-    output.push('\n');
+    output.push_str(&format!("# HELP cache_hits Total number of cache hits\n"));
+    output.push_str(&format!("# TYPE cache_hits counter\n"));
+    output.push_str(&format!("cache_hits {}\n", CACHE_HITS.load(Ordering::Relaxed)));
     
-    output.push_str("# HELP cache_misses Total number of cache misses\n");
-    output.push_str("# TYPE cache_misses counter\n");
-    output.push_str("cache_misses ");
-    output.push_str(&CACHE_MISSES.load(Ordering::Relaxed).to_string());
-    output.push('\n');
+    output.push_str(&format!("# HELP cache_misses Total number of cache misses\n"));
+    output.push_str(&format!("# TYPE cache_misses counter\n"));
+    output.push_str(&format!("cache_misses {}\n", CACHE_MISSES.load(Ordering::Relaxed)));
     
-    output.push_str("# HELP total Total number of requests\n");
-    output.push_str("# TYPE total counter\n");
-    output.push_str("total ");
-    output.push_str(&TOTAL_REQUESTS.load(Ordering::Relaxed).to_string());
-    output.push('\n');
+    output.push_str(&format!("# HELP total Total number of requests\n"));
+    output.push_str(&format!("# TYPE total counter\n"));
+    output.push_str(&format!("total {}\n", TOTAL_REQUESTS.load(Ordering::Relaxed)));
     
-    output.push_str("# HELP errors Total number of errors\n");
-    output.push_str("# TYPE errors counter\n");
-    output.push_str("errors ");
-    output.push_str(&ERRORED_REQUESTS.load(Ordering::Relaxed).to_string());
-    output.push('\n');
+    output.push_str(&format!("# HELP errors Total number of errors\n"));
+    output.push_str(&format!("# TYPE errors counter\n"));
+    output.push_str(&format!("errors {}\n", ERRORED_REQUESTS.load(Ordering::Relaxed)));
     
-    output.push_str("# HELP proxies Total number of proxied requests\n");
-    output.push_str("# TYPE proxies counter\n");
-    output.push_str("proxies ");
-    output.push_str(&PROXIED_REQUESTS.load(Ordering::Relaxed).to_string());
-    output.push('\n');
+    output.push_str(&format!("# HELP proxies Total number of proxied requests\n"));
+    output.push_str(&format!("# TYPE proxies counter\n"));
+    output.push_str(&format!("proxies {}\n", PROXIED_REQUESTS.load(Ordering::Relaxed)));
     
-    output.push_str("# HELP panics Total number of panics\n");
-    output.push_str("# TYPE panics counter\n");
-    output.push_str("panics ");
-    output.push_str(&PANICKED_REQUESTS.load(Ordering::Relaxed).to_string());
-    output.push('\n');
+    output.push_str(&format!("# HELP panics Total number of panics\n"));
+    output.push_str(&format!("# TYPE panics counter\n"));
+    output.push_str(&format!("panics {}\n", PANICKED_REQUESTS.load(Ordering::Relaxed)));
     
     // Gauges
-    output.push_str("# HELP rps Requests per second\n");
-    output.push_str("# TYPE rps gauge\n");
-    output.push_str("rps ");
-    output.push_str(&f64::from_bits(RPS.load(Ordering::Relaxed)).to_string());
-    output.push('\n');
+    output.push_str(&format!("# HELP rps Requests per second\n"));
+    output.push_str(&format!("# TYPE rps gauge\n"));
+    output.push_str(&format!("rps {}\n", f64::from_bits(RPS.load(Ordering::Relaxed))));
     
-    output.push_str("# HELP cache_memory_usage Cache logical memory usage in bytes (memory used by cache data structures)\n");
-    output.push_str("# TYPE cache_memory_usage gauge\n");
-    output.push_str("cache_memory_usage ");
-    output.push_str(&CACHE_MEMORY_USAGE.load(Ordering::Relaxed).to_string());
-    output.push('\n');
+    output.push_str(&format!("# HELP cache_memory_usage Cache logical memory usage in bytes (memory used by cache data structures)\n"));
+    output.push_str(&format!("# TYPE cache_memory_usage gauge\n"));
+    output.push_str(&format!("cache_memory_usage {}\n", CACHE_MEMORY_USAGE.load(Ordering::Relaxed)));
     
-    output.push_str("# HELP process_physical_memory_usage Process physical memory usage in bytes (RSS - Resident Set Size from system)\n");
-    output.push_str("# TYPE process_physical_memory_usage gauge\n");
-    output.push_str("process_physical_memory_usage ");
-    output.push_str(&PROCESS_PHYSICAL_MEMORY_USAGE.load(Ordering::Relaxed).to_string());
-    output.push('\n');
+    output.push_str(&format!("# HELP process_physical_memory_usage Process physical memory usage in bytes (RSS - Resident Set Size from system)\n"));
+    output.push_str(&format!("# TYPE process_physical_memory_usage gauge\n"));
+    output.push_str(&format!("process_physical_memory_usage {}\n", PROCESS_PHYSICAL_MEMORY_USAGE.load(Ordering::Relaxed)));
     
-    output.push_str("# HELP cache_length Number of items in cache\n");
-    output.push_str("# TYPE cache_length gauge\n");
-    output.push_str("cache_length ");
-    output.push_str(&CACHE_LENGTH.load(Ordering::Relaxed).to_string());
-    output.push('\n');
+    output.push_str(&format!("# HELP cache_length Number of items in cache\n"));
+    output.push_str(&format!("# TYPE cache_length gauge\n"));
+    output.push_str(&format!("cache_length {}\n", CACHE_LENGTH.load(Ordering::Relaxed)));
     
-    output.push_str("# HELP avg_duration_ns Average total duration in nanoseconds\n");
-    output.push_str("# TYPE avg_duration_ns gauge\n");
-    output.push_str("avg_duration_ns ");
-    output.push_str(&f64::from_bits(AVG_TOTAL_DURATION.load(Ordering::Relaxed)).to_string());
-    output.push('\n');
+    output.push_str(&format!("# HELP avg_duration_ns Average total duration in nanoseconds\n"));
+    output.push_str(&format!("# TYPE avg_duration_ns gauge\n"));
+    output.push_str(&format!("avg_duration_ns {}\n", f64::from_bits(AVG_TOTAL_DURATION.load(Ordering::Relaxed))));
     
-    output.push_str("# HELP avg_cache_duration_ns Average cache duration in nanoseconds\n");
-    output.push_str("# TYPE avg_cache_duration_ns gauge\n");
-    output.push_str("avg_cache_duration_ns ");
-    output.push_str(&f64::from_bits(AVG_CACHE_DURATION.load(Ordering::Relaxed)).to_string());
-    output.push('\n');
+    output.push_str(&format!("# HELP avg_cache_duration_ns Average cache duration in nanoseconds\n"));
+    output.push_str(&format!("# TYPE avg_cache_duration_ns gauge\n"));
+    output.push_str(&format!("avg_cache_duration_ns {}\n", f64::from_bits(AVG_CACHE_DURATION.load(Ordering::Relaxed))));
     
-    output.push_str("# HELP avg_proxy_duration_ns Average proxy duration in nanoseconds\n");
-    output.push_str("# TYPE avg_proxy_duration_ns gauge\n");
-    output.push_str("avg_proxy_duration_ns ");
-    output.push_str(&f64::from_bits(AVG_PROXY_DURATION.load(Ordering::Relaxed)).to_string());
-    output.push('\n');
+    output.push_str(&format!("# HELP avg_proxy_duration_ns Average proxy duration in nanoseconds\n"));
+    output.push_str(&format!("# TYPE avg_proxy_duration_ns gauge\n"));
+    output.push_str(&format!("avg_proxy_duration_ns {}\n", f64::from_bits(AVG_PROXY_DURATION.load(Ordering::Relaxed))));
     
-    output.push_str("# HELP avg_error_duration_ns Average error duration in nanoseconds\n");
-    output.push_str("# TYPE avg_error_duration_ns gauge\n");
-    output.push_str("avg_error_duration_ns ");
-    output.push_str(&f64::from_bits(AVG_ERROR_DURATION.load(Ordering::Relaxed)).to_string());
-    output.push('\n');
+    output.push_str(&format!("# HELP avg_error_duration_ns Average error duration in nanoseconds\n"));
+    output.push_str(&format!("# TYPE avg_error_duration_ns gauge\n"));
+    output.push_str(&format!("avg_error_duration_ns {}\n", f64::from_bits(AVG_ERROR_DURATION.load(Ordering::Relaxed))));
     
-    output.push_str("# HELP cpu_usage_cores CPU usage in cores (number of CPU cores utilized)\n");
-    output.push_str("# TYPE cpu_usage_cores gauge\n");
-    output.push_str("cpu_usage_cores ");
-    output.push_str(&f64::from_bits(CPU_USAGE_CORES.load(Ordering::Relaxed)).to_string());
-    output.push('\n');
+    output.push_str(&format!("# HELP cpu_usage_cores CPU usage in cores (number of CPU cores utilized)\n"));
+    output.push_str(&format!("# TYPE cpu_usage_cores gauge\n"));
+    output.push_str(&format!("cpu_usage_cores {}\n", f64::from_bits(CPU_USAGE_CORES.load(Ordering::Relaxed))));
     
     // Eviction metrics
-    output.push_str("# HELP soft_evicted_total_items Total items evicted by soft eviction\n");
-    output.push_str("# TYPE soft_evicted_total_items counter\n");
-    output.push_str("soft_evicted_total_items ");
-    output.push_str(&SOFT_EVICTIONS.load(Ordering::Relaxed).to_string());
-    output.push('\n');
+    output.push_str(&format!("# HELP soft_evicted_total_items Total items evicted by soft eviction\n"));
+    output.push_str(&format!("# TYPE soft_evicted_total_items counter\n"));
+    output.push_str(&format!("soft_evicted_total_items {}\n", SOFT_EVICTIONS.load(Ordering::Relaxed)));
     
-    output.push_str("# HELP soft_evicted_total_bytes Total bytes evicted by soft eviction\n");
-    output.push_str("# TYPE soft_evicted_total_bytes counter\n");
-    output.push_str("soft_evicted_total_bytes ");
-    output.push_str(&SOFT_BYTES_EVICTED.load(Ordering::Relaxed).to_string());
-    output.push('\n');
+    output.push_str(&format!("# HELP soft_evicted_total_bytes Total bytes evicted by soft eviction\n"));
+    output.push_str(&format!("# TYPE soft_evicted_total_bytes counter\n"));
+    output.push_str(&format!("soft_evicted_total_bytes {}\n", SOFT_BYTES_EVICTED.load(Ordering::Relaxed)));
     
-    output.push_str("# HELP soft_evicted_total_scans Total scans for soft eviction\n");
-    output.push_str("# TYPE soft_evicted_total_scans counter\n");
-    output.push_str("soft_evicted_total_scans ");
-    output.push_str(&SOFT_SCANS.load(Ordering::Relaxed).to_string());
-    output.push('\n');
+    output.push_str(&format!("# HELP soft_evicted_total_scans Total scans for soft eviction\n"));
+    output.push_str(&format!("# TYPE soft_evicted_total_scans counter\n"));
+    output.push_str(&format!("soft_evicted_total_scans {}\n", SOFT_SCANS.load(Ordering::Relaxed)));
     
-    output.push_str("# HELP hard_evicted_total_items Total items evicted by hard eviction\n");
-    output.push_str("# TYPE hard_evicted_total_items counter\n");
-    output.push_str("hard_evicted_total_items ");
-    output.push_str(&HARD_EVICTIONS.load(Ordering::Relaxed).to_string());
-    output.push('\n');
+    output.push_str(&format!("# HELP hard_evicted_total_items Total items evicted by hard eviction\n"));
+    output.push_str(&format!("# TYPE hard_evicted_total_items counter\n"));
+    output.push_str(&format!("hard_evicted_total_items {}\n", HARD_EVICTIONS.load(Ordering::Relaxed)));
     
-    output.push_str("# HELP hard_evicted_total_bytes Total bytes evicted by hard eviction\n");
-    output.push_str("# TYPE hard_evicted_total_bytes counter\n");
-    output.push_str("hard_evicted_total_bytes ");
-    output.push_str(&HARD_BYTES_EVICTED.load(Ordering::Relaxed).to_string());
-    output.push('\n');
+    output.push_str(&format!("# HELP hard_evicted_total_bytes Total bytes evicted by hard eviction\n"));
+    output.push_str(&format!("# TYPE hard_evicted_total_bytes counter\n"));
+    output.push_str(&format!("hard_evicted_total_bytes {}\n", HARD_BYTES_EVICTED.load(Ordering::Relaxed)));
     
-    output.push_str("# HELP admission_allowed Total items allowed by admission control\n");
-    output.push_str("# TYPE admission_allowed counter\n");
-    output.push_str("admission_allowed ");
-    output.push_str(&ADMISSION_ALLOWED.load(Ordering::Relaxed).to_string());
-    output.push('\n');
+    output.push_str(&format!("# HELP admission_allowed Total items allowed by admission control\n"));
+    output.push_str(&format!("# TYPE admission_allowed counter\n"));
+    output.push_str(&format!("admission_allowed {}\n", ADMISSION_ALLOWED.load(Ordering::Relaxed)));
     
-    output.push_str("# HELP admission_not_allowed Total items not allowed by admission control\n");
-    output.push_str("# TYPE admission_not_allowed counter\n");
-    output.push_str("admission_not_allowed ");
-    output.push_str(&ADMISSION_NOT_ALLOWED.load(Ordering::Relaxed).to_string());
-    output.push('\n');
+    output.push_str(&format!("# HELP admission_not_allowed Total items not allowed by admission control\n"));
+    output.push_str(&format!("# TYPE admission_not_allowed counter\n"));
+    output.push_str(&format!("admission_not_allowed {}\n", ADMISSION_NOT_ALLOWED.load(Ordering::Relaxed)));
     
     // Refresh metrics
-    output.push_str("# HELP refresh_updated Total items updated by refresh\n");
-    output.push_str("# TYPE refresh_updated counter\n");
-    output.push_str("refresh_updated ");
-    output.push_str(&REFRESH_UPDATED.load(Ordering::Relaxed).to_string());
-    output.push('\n');
+    output.push_str(&format!("# HELP refresh_updated Total items updated by refresh\n"));
+    output.push_str(&format!("# TYPE refresh_updated counter\n"));
+    output.push_str(&format!("refresh_updated {}\n", REFRESH_UPDATED.load(Ordering::Relaxed)));
     
-    output.push_str("# HELP refresh_errors Total refresh errors\n");
-    output.push_str("# TYPE refresh_errors counter\n");
-    output.push_str("refresh_errors ");
-    output.push_str(&REFRESH_ERRORS.load(Ordering::Relaxed).to_string());
-    output.push('\n');
+    output.push_str(&format!("# HELP refresh_errors Total refresh errors\n"));
+    output.push_str(&format!("# TYPE refresh_errors counter\n"));
+    output.push_str(&format!("refresh_errors {}\n", REFRESH_ERRORS.load(Ordering::Relaxed)));
     
-    output.push_str("# HELP refresh_scans Total refresh scans\n");
-    output.push_str("# TYPE refresh_scans counter\n");
-    output.push_str("refresh_scans ");
-    output.push_str(&REFRESH_SCANS.load(Ordering::Relaxed).to_string());
-    output.push('\n');
+    output.push_str(&format!("# HELP refresh_scans Total refresh scans\n"));
+    output.push_str(&format!("# TYPE refresh_scans counter\n"));
+    output.push_str(&format!("refresh_scans {}\n", REFRESH_SCANS.load(Ordering::Relaxed)));
     
-    output.push_str("# HELP refresh_hits Total refresh hits\n");
-    output.push_str("# TYPE refresh_hits counter\n");
-    output.push_str("refresh_hits ");
-    output.push_str(&REFRESH_HITS.load(Ordering::Relaxed).to_string());
-    output.push('\n');
+    output.push_str(&format!("# HELP refresh_hits Total refresh hits\n"));
+    output.push_str(&format!("# TYPE refresh_hits counter\n"));
+    output.push_str(&format!("refresh_hits {}\n", REFRESH_HITS.load(Ordering::Relaxed)));
     
-    output.push_str("# HELP refresh_miss Total refresh misses\n");
-    output.push_str("# TYPE refresh_miss counter\n");
-    output.push_str("refresh_miss ");
-    output.push_str(&REFRESH_MISS.load(Ordering::Relaxed).to_string());
-    output.push('\n');
+    output.push_str(&format!("# HELP refresh_miss Total refresh misses\n"));
+    output.push_str(&format!("# TYPE refresh_miss counter\n"));
+    output.push_str(&format!("refresh_miss {}\n", REFRESH_MISS.load(Ordering::Relaxed)));
     
     // Status code counters with labels
-    output.push_str("# HELP resp_status_total Total number of HTTP responses by status code\n");
-    output.push_str("# TYPE resp_status_total counter\n");
+    output.push_str(&format!("# HELP resp_status_total Total number of HTTP responses by status code\n"));
+    output.push_str(&format!("# TYPE resp_status_total counter\n"));
     let counters = get_status_code_counters();
     for (code, counter) in counters.iter().enumerate() {
         let count = counter.load(Ordering::Relaxed);
         if count > 0 {
-            output.push_str("resp_status_total{code=\"");
-            output.push_str(&code.to_string());
-            output.push_str("\"} ");
-            output.push_str(&count.to_string());
-            output.push('\n');
+            output.push_str(&format!("resp_status_total{{code=\"{}\"}} {}\n", code, count));
         }
     }
     
