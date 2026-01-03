@@ -13,7 +13,6 @@ use std::time::{Duration, Instant};
 use tokio::time::interval;
 use tokio_util::sync::CancellationToken;
 use tracing::info;
-use sysinfo::{System, Pid};
 
 use crate::config::{Config, ConfigTrait};
 use crate::dedlog;
@@ -21,7 +20,7 @@ use crate::http::header::filter_and_sort_request as filter_and_sort_headers;
 use crate::http::query::filter_and_sort_request as filter_and_sort_queries;
 use crate::http::render::renderer;
 use crate::http::Controller;
-use crate::http::{is_compression_enabled, panics_counter};
+use crate::http::is_compression_enabled;
 use crate::controller::metrics;
 use crate::metrics as prom_metrics;
 use crate::metrics::policy::Policy as LifetimePolicy;
@@ -455,14 +454,6 @@ impl CacheProxyController {
             let mut interval = interval(Duration::from_secs(5));
             interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
             let mut prev = time::now();
-            
-            // Initialize CPU monitoring for current process
-            let mut sys = System::new();
-            let current_pid = Pid::from_u32(std::process::id());
-            sys.refresh_processes();
-            sys.refresh_cpu();
-            // Wait a bit for accurate CPU readings
-            tokio::time::sleep(Duration::from_millis(100)).await;
 
             loop {
                 tokio::select! {
@@ -537,33 +528,7 @@ impl CacheProxyController {
                         metrics::set_avg_response_time(avg_duration, cache_avg_duration, proxy_avg_duration, errors_avg_duration);
                         metrics::set_rps(rps);
                         
-                        // Update CPU usage in cores for current process only
-                        sys.refresh_processes();
-                        sys.refresh_cpu();
-                        
-                        // Get CPU usage and memory for current process
-                        // process.cpu_usage() returns percentage that can exceed 100% on multi-core systems
-                        // If process uses 100% of 1 core on 6-core system: returns 100%
-                        // If process uses 100% of all 6 cores: returns 600%
-                        // So we divide by 100 to get number of cores utilized
-                        if let Some(process) = sys.process(current_pid) {
-                            let cpu_usage_cores = process.cpu_usage() as f64 / 100.0;
-                            metrics::set_cpu_usage_cores(cpu_usage_cores);
-                            
-                            // Get physical memory (RSS - Resident Set Size) in bytes
-                            let physical_memory_bytes = process.memory();
-                            metrics::set_process_physical_memory(physical_memory_bytes);
-                        } else {
-                            metrics::set_cpu_usage_cores(0.0);
-                            metrics::set_process_physical_memory(0);
-                        }
-                        
-                        // Note: Counters (hits, misses, total, errors, proxied) are now updated
-                        // in real-time when events occur. Local counters are reset here for
-                        // rate calculation (RPS) and logging, but metrics remain accumulated.
-                        // Status codes are also updated in real-time via inc_status_code().
-                        // Panics counter is tracked separately in middleware and read here for logging.
-
+              
                         if cfg.is_enabled() {
                             let hit_rate = if hits_num + misses_num > 0 {
                                 (hits_num as f64 / (hits_num + misses_num) as f64) * 100.0

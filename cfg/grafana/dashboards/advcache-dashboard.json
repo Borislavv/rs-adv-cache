@@ -852,7 +852,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "process_physical_memory_usage",
+          "expr": "process_resident_memory_bytes",
           "hide": false,
           "instant": false,
           "legendFormat": "Process physical memory (RSS)",
@@ -865,7 +865,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "process_physical_memory_usage - cache_memory_usage",
+          "expr": "process_resident_memory_bytes - cache_memory_usage",
           "hide": false,
           "instant": false,
           "legendFormat": "Overhead (physical - logical)",
@@ -993,7 +993,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "cpu_usage_cores",
+          "expr": "process_cpu_usage_ratio",
           "hide": false,
           "instant": false,
           "legendFormat": "Application CPU (cores)",

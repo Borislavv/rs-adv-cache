@@ -1,4 +1,14 @@
 //! Metrics controller with simple atomic counters and Prometheus formatting.
+//!
+//! Metrics organization:
+//! - Custom cache metrics: atomic counters/gauges (cache_memory_usage, cache_hits, etc.)
+//! - Process metrics: metrics-process (process_resident_memory_bytes, process_cpu_*, etc.)
+//!
+//! PromQL examples for Grafana:
+//! - RSS bytes: process_resident_memory_bytes
+//! - CPU usage: process_cpu_usage_ratio
+//! - Cache logical bytes: cache_memory_usage
+//! - Overhead: process_resident_memory_bytes - cache_memory_usage
 
 use axum::{http::StatusCode, response::IntoResponse, routing::get, Router};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -19,13 +29,11 @@ static PANICKED_REQUESTS: AtomicU64 = AtomicU64::new(0);
 // Gauges (f64 stored as u64 bits for atomic operations)
 static RPS: AtomicU64 = AtomicU64::new(0);
 static CACHE_MEMORY_USAGE: AtomicU64 = AtomicU64::new(0);
-static PROCESS_PHYSICAL_MEMORY_USAGE: AtomicU64 = AtomicU64::new(0);
 static CACHE_LENGTH: AtomicU64 = AtomicU64::new(0);
 static AVG_TOTAL_DURATION: AtomicU64 = AtomicU64::new(0);
 static AVG_CACHE_DURATION: AtomicU64 = AtomicU64::new(0);
 static AVG_PROXY_DURATION: AtomicU64 = AtomicU64::new(0);
 static AVG_ERROR_DURATION: AtomicU64 = AtomicU64::new(0);
-static CPU_USAGE_CORES: AtomicU64 = AtomicU64::new(0);
 
 // Eviction metrics
 static SOFT_EVICTIONS: AtomicU64 = AtomicU64::new(0);
@@ -72,10 +80,6 @@ pub fn set_cache_memory(bytes: u64) {
     CACHE_MEMORY_USAGE.store(bytes, Ordering::Relaxed);
 }
 
-/// Sets process physical memory usage (RSS - Resident Set Size from system).
-pub fn set_process_physical_memory(bytes: u64) {
-    PROCESS_PHYSICAL_MEMORY_USAGE.store(bytes, Ordering::Relaxed);
-}
 
 /// Increments total requests counter.
 pub fn inc_total(value: u64) {
@@ -110,10 +114,6 @@ pub fn set_avg_response_time(total_dur: f64, cache_dur: f64, proxy_dur: f64, err
     AVG_ERROR_DURATION.store(err_dur.to_bits(), Ordering::Relaxed);
 }
 
-/// Sets CPU usage in cores (number of CPU cores utilized).
-pub fn set_cpu_usage_cores(cores: f64) {
-    CPU_USAGE_CORES.store(cores.to_bits(), Ordering::Relaxed);
-}
 
 /// Adds soft eviction statistics.
 pub fn add_soft_eviction_stats(bytes: u64, items: u64, scans: u64) {
@@ -149,8 +149,8 @@ pub fn inc_status_code(code: u16) {
     }
 }
 
-/// Formats metrics in Prometheus format.
-fn format_prometheus_metrics() -> String {
+/// Renders manual metrics from atomic counters/gauges.
+fn render_manual_metrics() -> String {
     let mut output = String::new();
     
     // Counters
@@ -187,10 +187,6 @@ fn format_prometheus_metrics() -> String {
     output.push_str(&format!("# TYPE cache_memory_usage gauge\n"));
     output.push_str(&format!("cache_memory_usage {}\n", CACHE_MEMORY_USAGE.load(Ordering::Relaxed)));
     
-    output.push_str(&format!("# HELP process_physical_memory_usage Process physical memory usage in bytes (RSS - Resident Set Size from system)\n"));
-    output.push_str(&format!("# TYPE process_physical_memory_usage gauge\n"));
-    output.push_str(&format!("process_physical_memory_usage {}\n", PROCESS_PHYSICAL_MEMORY_USAGE.load(Ordering::Relaxed)));
-    
     output.push_str(&format!("# HELP cache_length Number of items in cache\n"));
     output.push_str(&format!("# TYPE cache_length gauge\n"));
     output.push_str(&format!("cache_length {}\n", CACHE_LENGTH.load(Ordering::Relaxed)));
@@ -210,10 +206,6 @@ fn format_prometheus_metrics() -> String {
     output.push_str(&format!("# HELP avg_error_duration_ns Average error duration in nanoseconds\n"));
     output.push_str(&format!("# TYPE avg_error_duration_ns gauge\n"));
     output.push_str(&format!("avg_error_duration_ns {}\n", f64::from_bits(AVG_ERROR_DURATION.load(Ordering::Relaxed))));
-    
-    output.push_str(&format!("# HELP cpu_usage_cores CPU usage in cores (number of CPU cores utilized)\n"));
-    output.push_str(&format!("# TYPE cpu_usage_cores gauge\n"));
-    output.push_str(&format!("cpu_usage_cores {}\n", f64::from_bits(CPU_USAGE_CORES.load(Ordering::Relaxed))));
     
     // Eviction metrics
     output.push_str(&format!("# HELP soft_evicted_total_items Total items evicted by soft eviction\n"));
@@ -279,6 +271,28 @@ fn format_prometheus_metrics() -> String {
     output
 }
 
+/// Formats metrics in Prometheus format.
+/// 
+/// Combines:
+/// - Process metrics from metrics-process (via metrics-exporter-prometheus handle.render())
+/// - Custom cache metrics (atomic counters/gauges)
+pub fn metrics_text() -> String {
+    let mut out = String::new();
+
+    if let Some(s) = crate::metrics_runtime::scrape_prometheus_text() {
+        out.push_str(&s);
+        if !out.ends_with('\n') {
+            out.push('\n');
+        }
+    }
+
+    // Append manual metrics from atomic counters
+    out.push_str(&render_manual_metrics());
+
+    out
+}
+
+
 /// PrometheusMetricsController handles Prometheus metrics endpoint.
 pub struct PrometheusMetricsController;
 
@@ -290,7 +304,7 @@ impl PrometheusMetricsController {
 
     /// Handles the metrics request.
     async fn get_metrics() -> impl IntoResponse {
-        let metrics_text = format_prometheus_metrics();
+        let metrics_text = metrics_text();
         
         (
             StatusCode::OK,

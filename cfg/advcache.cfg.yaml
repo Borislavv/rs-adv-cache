@@ -51,7 +51,7 @@ cache:
 
   storage:
     mode: listing                 # Implementation of LRU algo through per-shard lists or Redis style sampling (values=sampling/listing).
-    size: 10737418240             # Max memory budget for storage (bytes). Here: 50 GiB.
+    size: 21474836480             # Max memory budget for storage (bytes). Here: 50 GiB.
 
   admission:
     enabled: false

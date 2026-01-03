@@ -25,6 +25,7 @@ pub mod controller;
 pub mod governor;
 pub mod http;
 pub mod metrics;
+pub mod metrics_runtime;
 pub mod middleware;
 pub mod model;
 pub mod shutdown;

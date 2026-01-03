@@ -55,10 +55,11 @@ crc32fast = "1.3"
 xxhash-rust = { version = "0.8", features = ["xxh3"] }
 
 # Metrics (Prometheus/VictoriaMetrics compatible)
-# Using simple atomic counters instead of metrics library
-# metrics = "0.21"
-# metrics-prometheus = "0.6"
-# metrics-exporter-prometheus = "0.6"
+# Using simple atomic counters for custom cache metrics
+# Using metrics ecosystem for process metrics (CPU, RSS)
+metrics = "0.24"
+metrics-exporter-prometheus = "0.17"
+metrics-process = "2.4"
 
 # OpenTelemetry
 opentelemetry = "0.21"
