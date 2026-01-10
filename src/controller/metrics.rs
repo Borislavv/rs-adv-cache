@@ -18,7 +18,6 @@ use crate::http::Controller;
 
 pub const PROMETHEUS_METRICS_PATH: &str = "/metrics";
 
-// Atomic counters for metrics
 static CACHE_HITS: AtomicU64 = AtomicU64::new(0);
 static CACHE_MISSES: AtomicU64 = AtomicU64::new(0);
 static TOTAL_REQUESTS: AtomicU64 = AtomicU64::new(0);
@@ -26,7 +25,7 @@ static ERRORED_REQUESTS: AtomicU64 = AtomicU64::new(0);
 static PROXIED_REQUESTS: AtomicU64 = AtomicU64::new(0);
 static PANICKED_REQUESTS: AtomicU64 = AtomicU64::new(0);
 
-// Gauges (f64 stored as u64 bits for atomic operations)
+// Gauges store f64 values as u64 bits for atomic operations
 static RPS: AtomicU64 = AtomicU64::new(0);
 static CACHE_MEMORY_USAGE: AtomicU64 = AtomicU64::new(0);
 static CACHE_LENGTH: AtomicU64 = AtomicU64::new(0);
@@ -35,7 +34,6 @@ static AVG_CACHE_DURATION: AtomicU64 = AtomicU64::new(0);
 static AVG_PROXY_DURATION: AtomicU64 = AtomicU64::new(0);
 static AVG_ERROR_DURATION: AtomicU64 = AtomicU64::new(0);
 
-// Eviction metrics
 static SOFT_EVICTIONS: AtomicU64 = AtomicU64::new(0);
 static SOFT_BYTES_EVICTED: AtomicU64 = AtomicU64::new(0);
 static SOFT_SCANS: AtomicU64 = AtomicU64::new(0);
@@ -44,14 +42,12 @@ static HARD_BYTES_EVICTED: AtomicU64 = AtomicU64::new(0);
 static ADMISSION_ALLOWED: AtomicU64 = AtomicU64::new(0);
 static ADMISSION_NOT_ALLOWED: AtomicU64 = AtomicU64::new(0);
 
-// Refresh metrics
 static REFRESH_UPDATED: AtomicU64 = AtomicU64::new(0);
 static REFRESH_ERRORS: AtomicU64 = AtomicU64::new(0);
 static REFRESH_SCANS: AtomicU64 = AtomicU64::new(0);
 static REFRESH_HITS: AtomicU64 = AtomicU64::new(0);
 static REFRESH_MISS: AtomicU64 = AtomicU64::new(0);
 
-// Status code counters (0-599)
 static STATUS_CODE_COUNTERS: OnceLock<Vec<AtomicU64>> = OnceLock::new();
 
 fn get_status_code_counters() -> &'static Vec<AtomicU64> {
@@ -79,7 +75,6 @@ pub fn set_rps(value: f64) {
 pub fn set_cache_memory(bytes: u64) {
     CACHE_MEMORY_USAGE.store(bytes, Ordering::Relaxed);
 }
-
 
 /// Increments total requests counter.
 pub fn inc_total(value: u64) {
@@ -113,7 +108,6 @@ pub fn set_avg_response_time(total_dur: f64, cache_dur: f64, proxy_dur: f64, err
     AVG_PROXY_DURATION.store(proxy_dur.to_bits(), Ordering::Relaxed);
     AVG_ERROR_DURATION.store(err_dur.to_bits(), Ordering::Relaxed);
 }
-
 
 /// Adds soft eviction statistics.
 pub fn add_soft_eviction_stats(bytes: u64, items: u64, scans: u64) {
@@ -153,7 +147,6 @@ pub fn inc_status_code(code: u16) {
 fn render_manual_metrics() -> String {
     let mut output = String::new();
     
-    // Counters
     output.push_str(&format!("# HELP cache_hits Total number of cache hits\n"));
     output.push_str(&format!("# TYPE cache_hits counter\n"));
     output.push_str(&format!("cache_hits {}\n", CACHE_HITS.load(Ordering::Relaxed)));
@@ -178,7 +171,6 @@ fn render_manual_metrics() -> String {
     output.push_str(&format!("# TYPE panics counter\n"));
     output.push_str(&format!("panics {}\n", PANICKED_REQUESTS.load(Ordering::Relaxed)));
     
-    // Gauges
     output.push_str(&format!("# HELP rps Requests per second\n"));
     output.push_str(&format!("# TYPE rps gauge\n"));
     output.push_str(&format!("rps {}\n", f64::from_bits(RPS.load(Ordering::Relaxed))));
@@ -207,7 +199,6 @@ fn render_manual_metrics() -> String {
     output.push_str(&format!("# TYPE avg_error_duration_ns gauge\n"));
     output.push_str(&format!("avg_error_duration_ns {}\n", f64::from_bits(AVG_ERROR_DURATION.load(Ordering::Relaxed))));
     
-    // Eviction metrics
     output.push_str(&format!("# HELP soft_evicted_total_items Total items evicted by soft eviction\n"));
     output.push_str(&format!("# TYPE soft_evicted_total_items counter\n"));
     output.push_str(&format!("soft_evicted_total_items {}\n", SOFT_EVICTIONS.load(Ordering::Relaxed)));
@@ -236,7 +227,6 @@ fn render_manual_metrics() -> String {
     output.push_str(&format!("# TYPE admission_not_allowed counter\n"));
     output.push_str(&format!("admission_not_allowed {}\n", ADMISSION_NOT_ALLOWED.load(Ordering::Relaxed)));
     
-    // Refresh metrics
     output.push_str(&format!("# HELP refresh_updated Total items updated by refresh\n"));
     output.push_str(&format!("# TYPE refresh_updated counter\n"));
     output.push_str(&format!("refresh_updated {}\n", REFRESH_UPDATED.load(Ordering::Relaxed)));
@@ -257,7 +247,6 @@ fn render_manual_metrics() -> String {
     output.push_str(&format!("# TYPE refresh_miss counter\n"));
     output.push_str(&format!("refresh_miss {}\n", REFRESH_MISS.load(Ordering::Relaxed)));
     
-    // Status code counters with labels
     output.push_str(&format!("# HELP resp_status_total Total number of HTTP responses by status code\n"));
     output.push_str(&format!("# TYPE resp_status_total counter\n"));
     let counters = get_status_code_counters();
@@ -268,8 +257,6 @@ fn render_manual_metrics() -> String {
         }
     }
     
-    // Process footprint (cross-platform memory footprint metric)
-    // Always output the metric, even if we can't get the value (output 0 as fallback)
     let footprint = get_process_footprint_bytes().unwrap_or(0);
     output.push_str(&format!("# HELP process_footprint_bytes Process memory footprint in bytes (cross-platform)\n"));
     output.push_str(&format!("# TYPE process_footprint_bytes gauge\n"));
@@ -289,8 +276,6 @@ fn render_manual_metrics() -> String {
 fn get_process_footprint_bytes() -> Option<u64> {
     #[cfg(target_os = "macos")]
     {
-        // Use proc_pid_rusage with RUSAGE_INFO_V2 to get ri_phys_footprint
-        // This is the most reliable source that matches Activity Monitor "Memory" column
         use std::mem::zeroed;
 
         #[repr(C)]
@@ -304,7 +289,7 @@ fn get_process_footprint_bytes() -> Option<u64> {
             ri_pageins: u64,
             ri_wired_size: u64,
             ri_resident_size: u64,
-            ri_phys_footprint: u64, // <-- This is what we need (matches Activity Monitor)
+            ri_phys_footprint: u64,
             ri_proc_start_abstime: u64,
             ri_proc_exit_abstime: u64,
             ri_child_user_time: u64,
@@ -338,10 +323,7 @@ fn get_process_footprint_bytes() -> Option<u64> {
     
     #[cfg(target_os = "linux")]
     {
-        // Read /proc/self/status to get VmRSS and VmSwap
-        // VmRSS: Resident Set Size (physical memory in KB)
-        // VmSwap: Swap memory used by process (in KB)
-        // Sum both to get total memory footprint
+        // Read VmRSS and VmSwap from /proc/self/status (both in KB), sum and convert to bytes
         if let Ok(status_content) = std::fs::read_to_string("/proc/self/status") {
             let mut vmrss_kb: Option<u64> = None;
             let mut vmswap_kb: Option<u64> = None;
@@ -361,23 +343,16 @@ fn get_process_footprint_bytes() -> Option<u64> {
                     }
                 }
                 
-                // Early exit if we found both values
                 if vmrss_kb.is_some() && vmswap_kb.is_some() {
                     break;
                 }
             }
             
-            // Sum RSS and Swap, convert KB to bytes
-            // VmRSS and VmSwap from /proc/self/status are in KB
             match (vmrss_kb, vmswap_kb) {
                 (Some(rss), Some(swap)) => {
-                    let total_kb = rss + swap;
-                    // Convert KB to bytes
-                    return Some(total_kb * 1024);
+                    return Some((rss + swap) * 1024);
                 }
                 (Some(rss), None) => {
-                    // At least return RSS if swap is not available
-                    // Convert KB to bytes
                     return Some(rss * 1024);
                 }
                 _ => {}
@@ -385,16 +360,12 @@ fn get_process_footprint_bytes() -> Option<u64> {
         }
         
         // Fallback: Try cgroup v2 memory.current if available
-        // First, try to find cgroup v2 mount point from /proc/self/mountinfo
         if let Ok(mountinfo) = std::fs::read_to_string("/proc/self/mountinfo") {
             for line in mountinfo.lines() {
-                // Look for cgroup2 mount point (format: mount_id parent_id major:minor root mount_point)
                 let parts: Vec<&str> = line.split_whitespace().collect();
                 if parts.len() >= 5 {
                     let mount_point = parts[4];
-                    // Check if this is a cgroup2 mount (typically /sys/fs/cgroup or /sys/fs/cgroup/unified)
                     if mount_point.contains("cgroup") && line.contains("cgroup2") {
-                        // Try to find memory.current in this mount point
                         if let Ok(cgroup_line) = std::fs::read_to_string("/proc/self/cgroup") {
                             for cg_line in cgroup_line.lines() {
                                 if cg_line.starts_with("0::") {
@@ -415,20 +386,17 @@ fn get_process_footprint_bytes() -> Option<u64> {
             }
         }
         
-        // Final fallback: /proc/self/statm RSS (Resident Set Size)
-        // This is less accurate as it doesn't include swap, but it's better than nothing
+        // Final fallback: /proc/self/statm RSS (doesn't include swap)
         if let Ok(content) = std::fs::read_to_string("/proc/self/statm") {
             let parts: Vec<&str> = content.split_whitespace().collect();
             if parts.len() >= 2 {
                 if let Ok(pages) = parts[1].parse::<u64>() {
-                    // Get page size using sysconf
                     unsafe {
                         let page_size = libc::sysconf(libc::_SC_PAGESIZE) as u64;
                         if page_size > 0 {
                             return Some(pages * page_size);
                         }
                     }
-                    // Fallback to 4096 if sysconf fails
                     return Some(pages * 4096);
                 }
             }
@@ -445,9 +413,7 @@ fn get_process_footprint_bytes() -> Option<u64> {
 
 /// Formats metrics in Prometheus format.
 /// 
-/// Combines:
-/// - Process metrics from metrics-process (via metrics-exporter-prometheus handle.render())
-/// - Custom cache metrics (atomic counters/gauges)
+/// Combines process metrics from metrics-process library with custom cache metrics.
 pub fn metrics_text() -> String {
     let mut out = String::new();
 
@@ -458,12 +424,10 @@ pub fn metrics_text() -> String {
         }
     }
 
-    // Append manual metrics from atomic counters
     out.push_str(&render_manual_metrics());
 
     out
 }
-
 
 /// PrometheusMetricsController handles Prometheus metrics endpoint.
 pub struct PrometheusMetricsController;

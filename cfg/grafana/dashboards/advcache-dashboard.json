@@ -932,7 +932,7 @@
               }
             ]
           },
-          "unit": "cores"
+          "unit": "s"
         },
         "overrides": []
       },
@@ -969,21 +969,10 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "sum(rate(process_cpu_seconds_total{namespace=\"$namespace\",pod=~\"$deployment.*\"}[$__rate_interval])) by (pod)",
-          "legendFormat": "{{pod}} (process)",
-          "range": true,
-          "refId": "A"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${datasource}"
-          },
-          "editorMode": "code",
-          "expr": "process_cpu_usage_ratio",
+          "expr": "rate(process_cpu_seconds_total[1m])",
           "hide": false,
           "instant": false,
-          "legendFormat": "Application CPU (cores)",
+          "legendFormat": "__auto",
           "range": true,
           "refId": "B"
         }
