@@ -157,19 +157,6 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "rate(total[1m])",
-          "hide": false,
-          "instant": false,
-          "legendFormat": "RPS",
-          "range": true,
-          "refId": "C"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${datasource}"
-          },
-          "editorMode": "code",
           "expr": "rate(proxies[1m])",
           "hide": false,
           "instant": false,
@@ -1305,7 +1292,7 @@
       "type": "timeseries"
     }
   ],
-  "refresh": "5s",
+  "refresh": false,
   "schemaVersion": 38,
   "tags": [
     "common",
@@ -1334,13 +1321,13 @@
     ]
   },
   "time": {
-    "from": "now-5m",
-    "to": "now"
+    "from": "2026-01-10T07:13:51.223Z",
+    "to": "2026-01-10T07:21:15.260Z"
   },
   "timepicker": {},
   "timezone": "",
   "title": "AdvCache Metrics",
   "uid": "advcache-main",
-  "version": 32,
+  "version": 35,
   "weekStart": ""
 }
