@@ -268,7 +268,179 @@ fn render_manual_metrics() -> String {
         }
     }
     
+    // Process footprint (cross-platform memory footprint metric)
+    // Always output the metric, even if we can't get the value (output 0 as fallback)
+    let footprint = get_process_footprint_bytes().unwrap_or(0);
+    output.push_str(&format!("# HELP process_footprint_bytes Process memory footprint in bytes (cross-platform)\n"));
+    output.push_str(&format!("# TYPE process_footprint_bytes gauge\n"));
+    output.push_str(&format!("process_footprint_bytes {}\n", footprint));
+    
     output
+}
+
+/// Gets process memory footprint in bytes (cross-platform).
+/// 
+/// - macOS: Uses proc_pid_rusage with RUSAGE_INFO_V2 to get ri_phys_footprint
+///   This matches Activity Monitor "Memory" column exactly
+/// - Linux: Reads /proc/self/status and sums VmRSS + VmSwap (both in KB, converted to bytes)
+/// 
+/// Returns None on error or unsupported platform.
+/// All reads happen only in /metrics handler (scrape path), not in hot path.
+fn get_process_footprint_bytes() -> Option<u64> {
+    #[cfg(target_os = "macos")]
+    {
+        // Use proc_pid_rusage with RUSAGE_INFO_V2 to get ri_phys_footprint
+        // This is the most reliable source that matches Activity Monitor "Memory" column
+        use std::mem::zeroed;
+
+        #[repr(C)]
+        #[derive(Copy, Clone)]
+        struct RusageInfoV2 {
+            ri_uuid: [u8; 16],
+            ri_user_time: u64,
+            ri_system_time: u64,
+            ri_pkg_idle_wkups: u64,
+            ri_interrupt_wkups: u64,
+            ri_pageins: u64,
+            ri_wired_size: u64,
+            ri_resident_size: u64,
+            ri_phys_footprint: u64, // <-- This is what we need (matches Activity Monitor)
+            ri_proc_start_abstime: u64,
+            ri_proc_exit_abstime: u64,
+            ri_child_user_time: u64,
+            ri_child_system_time: u64,
+            ri_child_pkg_idle_wkups: u64,
+            ri_child_interrupt_wkups: u64,
+            ri_child_pageins: u64,
+            ri_child_elapsed_abstime: u64,
+            ri_diskio_bytesread: u64,
+            ri_diskio_byteswritten: u64,
+        }
+
+        unsafe {
+            #[link(name = "proc")]
+            extern "C" {
+                fn proc_pid_rusage(pid: libc::c_int, flavor: libc::c_int, buffer: *mut libc::c_void) -> libc::c_int;
+            }
+
+            const RUSAGE_INFO_V2: libc::c_int = 2;
+
+            let mut info: RusageInfoV2 = zeroed();
+            let rc = proc_pid_rusage(libc::getpid(), RUSAGE_INFO_V2, &mut info as *mut _ as *mut libc::c_void);
+
+            if rc == 0 && info.ri_phys_footprint > 0 {
+                return Some(info.ri_phys_footprint);
+            }
+        }
+
+        None
+    }
+    
+    #[cfg(target_os = "linux")]
+    {
+        // Read /proc/self/status to get VmRSS and VmSwap
+        // VmRSS: Resident Set Size (physical memory in KB)
+        // VmSwap: Swap memory used by process (in KB)
+        // Sum both to get total memory footprint
+        if let Ok(status_content) = std::fs::read_to_string("/proc/self/status") {
+            let mut vmrss_kb: Option<u64> = None;
+            let mut vmswap_kb: Option<u64> = None;
+            
+            for line in status_content.lines() {
+                if line.starts_with("VmRSS:") {
+                    if let Some(value) = line.split_whitespace().nth(1) {
+                        if let Ok(kb) = value.parse::<u64>() {
+                            vmrss_kb = Some(kb);
+                        }
+                    }
+                } else if line.starts_with("VmSwap:") {
+                    if let Some(value) = line.split_whitespace().nth(1) {
+                        if let Ok(kb) = value.parse::<u64>() {
+                            vmswap_kb = Some(kb);
+                        }
+                    }
+                }
+                
+                // Early exit if we found both values
+                if vmrss_kb.is_some() && vmswap_kb.is_some() {
+                    break;
+                }
+            }
+            
+            // Sum RSS and Swap, convert KB to bytes
+            // VmRSS and VmSwap from /proc/self/status are in KB
+            match (vmrss_kb, vmswap_kb) {
+                (Some(rss), Some(swap)) => {
+                    let total_kb = rss + swap;
+                    // Convert KB to bytes
+                    return Some(total_kb * 1024);
+                }
+                (Some(rss), None) => {
+                    // At least return RSS if swap is not available
+                    // Convert KB to bytes
+                    return Some(rss * 1024);
+                }
+                _ => {}
+            }
+        }
+        
+        // Fallback: Try cgroup v2 memory.current if available
+        // First, try to find cgroup v2 mount point from /proc/self/mountinfo
+        if let Ok(mountinfo) = std::fs::read_to_string("/proc/self/mountinfo") {
+            for line in mountinfo.lines() {
+                // Look for cgroup2 mount point (format: mount_id parent_id major:minor root mount_point)
+                let parts: Vec<&str> = line.split_whitespace().collect();
+                if parts.len() >= 5 {
+                    let mount_point = parts[4];
+                    // Check if this is a cgroup2 mount (typically /sys/fs/cgroup or /sys/fs/cgroup/unified)
+                    if mount_point.contains("cgroup") && line.contains("cgroup2") {
+                        // Try to find memory.current in this mount point
+                        if let Ok(cgroup_line) = std::fs::read_to_string("/proc/self/cgroup") {
+                            for cg_line in cgroup_line.lines() {
+                                if cg_line.starts_with("0::") {
+                                    let cgroup_dir = cg_line.strip_prefix("0::").unwrap_or("");
+                                    if !cgroup_dir.is_empty() {
+                                        let memory_current_path = format!("{}{}/memory.current", mount_point, cgroup_dir);
+                                        if let Ok(content) = std::fs::read_to_string(&memory_current_path) {
+                                            if let Ok(bytes) = content.trim().parse::<u64>() {
+                                                return Some(bytes);
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        
+        // Final fallback: /proc/self/statm RSS (Resident Set Size)
+        // This is less accurate as it doesn't include swap, but it's better than nothing
+        if let Ok(content) = std::fs::read_to_string("/proc/self/statm") {
+            let parts: Vec<&str> = content.split_whitespace().collect();
+            if parts.len() >= 2 {
+                if let Ok(pages) = parts[1].parse::<u64>() {
+                    // Get page size using sysconf
+                    unsafe {
+                        let page_size = libc::sysconf(libc::_SC_PAGESIZE) as u64;
+                        if page_size > 0 {
+                            return Some(pages * page_size);
+                        }
+                    }
+                    // Fallback to 4096 if sysconf fails
+                    return Some(pages * 4096);
+                }
+            }
+        }
+        
+        None
+    }
+    
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    {
+        None
+    }
 }
 
 /// Formats metrics in Prometheus format.

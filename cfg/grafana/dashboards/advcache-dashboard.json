@@ -852,10 +852,10 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "process_resident_memory_bytes",
+          "expr": "process_footprint_bytes",
           "hide": false,
           "instant": false,
-          "legendFormat": "Process physical memory (RSS)",
+          "legendFormat": "Process memory footprint (system monitor)",
           "range": true,
           "refId": "B"
         },
@@ -865,23 +865,10 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "process_resident_memory_bytes - cache_memory_usage",
+          "expr": "process_footprint_bytes - cache_memory_usage",
           "hide": false,
           "instant": false,
-          "legendFormat": "Overhead (physical - logical)",
-          "range": true,
-          "refId": "C"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${datasource}"
-          },
-          "editorMode": "code",
-          "expr": "container_memory_working_set_bytes{namespace=\"$namespace\",container=\"$container\",pod=~\"$deployment.*\"}",
-          "hide": false,
-          "instant": false,
-          "legendFormat": "Container memory usage",
+          "legendFormat": "Overhead (footprint - logical)",
           "range": true,
           "refId": "D"
         }
@@ -1365,6 +1352,6 @@
   "timezone": "",
   "title": "AdvCache Metrics",
   "uid": "advcache-main",
-  "version": 24,
+  "version": 32,
   "weekStart": ""
 }
