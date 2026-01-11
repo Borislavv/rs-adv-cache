@@ -41,6 +41,9 @@
 
 ## 🏃 Quick Start
 
+<details>
+<summary>Click to expand Quick Start</summary>
+
 ### Prerequisites
 
 - Rust 1.82+ (for building from source)
@@ -222,7 +225,12 @@ cache:
 
 </details>
 
+</details>
+
 ## 🏗️ Architecture
+
+<details>
+<summary>Click to expand Architecture</summary>
 
 ### Core Components
 
@@ -239,7 +247,12 @@ cache:
 - **Eviction Worker**: Soft and hard memory limit enforcement with configurable intervals
 - **Lifetime Manager**: TTL-based refresh and expiration with beta distribution for load spreading
 
+</details>
+
 ## 📡 API Reference
+
+<details>
+<summary>Click to expand API Reference</summary>
 
 ### Main Endpoints
 
@@ -301,7 +314,12 @@ cache:
 
 Complete API documentation is available via Swagger/OpenAPI specification at `api/swagger.yaml`.
 
+</details>
+
 ## 📊 Monitoring & Observability
+
+<details>
+<summary>Click to expand Monitoring & Observability</summary>
 
 ### Prometheus Metrics
 
@@ -335,7 +353,12 @@ Structured logging with configurable levels:
 - **Levels**: trace, debug, info, warn, error
 - **Components**: Component-based filtering for focused debugging
 
+</details>
+
 ## 🛠️ Development
+
+<details>
+<summary>Click to expand Development</summary>
 
 ### Building from Source
 
@@ -372,7 +395,12 @@ cargo test --test e2e
 
 > **Note**: Performance depends on workload characteristics (document size, cache hit ratio, request patterns).
 
+</details>
+
 ## Performance Charts
+
+<details>
+<summary>Click to expand Performance Charts</summary>
 
 ### MacBook M2 Pro Max (12 cores, 24GB RAM)
 
@@ -397,7 +425,12 @@ cargo test --test e2e
 - **Proxy: req. weight 32kb**
 ![8](https://github.com/user-attachments/assets/ab59b0cc-b5b1-49c3-8f89-d999a73a1c70)
 
+</details>
+
 ## 🎯 Performance Tuning
+
+<details>
+<summary>Click to expand Performance Tuning</summary>
 
 ### Throughput Optimization
 
@@ -418,6 +451,8 @@ cargo test --test e2e
 2. **Upstream Timeout**: Set appropriate `timeout` and `max_timeout` values
 3. **Connection Pooling**: Configure `concurrency` for upstream connections
 4. **Tracing**: Use sampling (`sampling_rate: 0.1`) to reduce overhead
+
+</details>
 
 ## 📄 License
 
