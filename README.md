@@ -1,4 +1,4 @@
-# Advanced Cache (advCache) - High-Performance HTTP Cache & Reverse Proxy
+# Advanced Cache
 
 [![Rust Version](https://img.shields.io/static/v1?label=Rust&message=1.82%2B&logo=rust&color=000000)](https://www.rust-lang.org/tools/install) [![Coverage](https://img.shields.io/codecov/c/github/Borislavv/rs-adv-cache?label=coverage)](https://codecov.io/gh/Borislavv/adv-cache) [![License](https://img.shields.io/badge/License-Apache--2.0-green.svg)](./LICENSE)
 
@@ -7,8 +7,8 @@
 ## 🚀 Key Features
 
 ### Performance & Scalability
-- **High Throughput**: 165k RPS locally, up to 300k RPS on 24-core bare-metal servers
-- **Memory Efficient**: Only 3-4GB overhead for 40GB of cached data
+- **High Throughput**: 165k RPS MacBook M2 Pro MAX, up to 300k RPS on 24-core bare-metal servers ([see performance screenshots](#performance-charts))
+- **Memory Efficient**: up to 64 bytes overhead per cache key
 - **Sharded Storage**: 1024 shards with per-shard LRU for optimal lock contention reduction
 
 ### Advanced Caching
@@ -52,7 +52,7 @@
 
 ### Installation
 
-#### Using Docker (Recommended)
+#### Using Docker
 
 ```bash
 # Build the Docker image
@@ -226,7 +226,7 @@ cache:
 
 #### Storage Layer
 - **Sharded Map**: 1024 shards for distributed lock contention
-- **LRU Implementation**: Doubly-linked list with raw pointers for O(1) operations
+- **LRU Implementation**: Doubly-linked list with raw pointers for O(1) operations OR Redis-style LRU sampling (can be changed through Config)
 
 #### Admission Control
 - **TinyLFU Algorithm**: Frequency-based admission using Count-Min Sketch
@@ -236,36 +236,6 @@ cache:
 #### Background Workers
 - **Eviction Worker**: Soft and hard memory limit enforcement with configurable intervals
 - **Lifetime Manager**: TTL-based refresh and expiration with beta distribution for load spreading
-- **Scalable Workers**: Runtime-adjustable replica count for both workers
-
-### Request Flow
-
-1. **Request Reception**: Axum server receives HTTP request
-2. **Cache Key Generation**: Extract and filter query parameters and headers per rule
-3. **Cache Lookup**: Sharded map lookup with O(1) complexity
-4. **Cache Hit**: Return cached response with stored headers
-5. **Cache Miss**: Forward to upstream, cache response, return to client
-6. **Background Refresh**: Lifetime manager refreshes expired entries asynchronously
-
-## ⚙️ Configuration
-
-### Configuration File Structure
-
-The configuration file (`advcache.cfg.yaml`) supports the following main sections:
-
-- **`cache`**: Global cache settings (environment, logging, runtime)
-- **`api`**: HTTP server configuration (port, name)
-- **`upstream`**: Backend configuration (URL, timeouts, health checks, policy)
-- **`compression`**: Response compression settings (gzip, brotli)
-- **`data`**: Dump/load configuration and mock data settings
-- **`storage`**: Cache storage settings (size, mode)
-- **`admission`**: TinyLFU admission control parameters
-- **`eviction`**: Eviction worker configuration
-- **`lifetime`**: TTL and refresh policy settings
-- **`traces`**: OpenTelemetry tracing configuration
-- **`metrics`**: Prometheus metrics settings
-- **`k8s`**: Kubernetes integration (health probes)
-- **`rules`**: Path-based cache rules with key/value configuration
 
 ## 📡 API Reference
 
@@ -328,54 +298,6 @@ The configuration file (`advcache.cfg.yaml`) supports the following main section
 ### OpenAPI Documentation
 
 Complete API documentation is available via Swagger/OpenAPI specification at `api/swagger.yaml`.
-
-## 🎯 Performance Tuning
-
-### Throughput Optimization
-
-1. **CPU Cores**: Set `runtime.num_cpus: 0` to use all available cores
-2. **Sharding**: Default 1024 shards provide optimal lock contention distribution
-3. **Admission Control**: Enable TinyLFU to protect hot cache set
-4. **Worker Scaling**: Adjust `eviction.replicas` and `lifetime.replicas` based on load
-
-### Memory Optimization
-
-1. **Storage Size**: Set `storage.size` based on available memory (recommended: 50-80% of total)
-2. **Object Pooling**: Enabled by default, no configuration needed
-3. **Eviction Limits**: Configure `soft_limit` (0.8) and `hard_limit` (0.99) for memory pressure handling
-
-### Latency Optimization
-
-1. **Compression**: Enable with `level: 1` for minimal CPU overhead
-2. **Upstream Timeout**: Set appropriate `timeout` and `max_timeout` values
-3. **Connection Pooling**: Configure `concurrency` for upstream connections
-4. **Tracing**: Use sampling (`sampling_rate: 0.1`) to reduce overhead
-
-## 🚢 Deployment
-
-### Docker Deployment
-
-```bash
-# Build image
-docker build -t advcache:latest .
-
-# Run with volume mounts
-docker run -d \
-  --name advcache \
-  -p 8020:8020 \
-  -v "$PWD/cfg:/app/cfg:ro" \
-  -v "$PWD/public/dump:/app/public/dump" \
-  advcache:latest \
-  -cfg /app/cfg/advcache.cfg.yaml
-```
-
-### Production Considerations
-
-1. **Resource Limits**: Set appropriate CPU and memory limits based on cache size
-2. **Health Probes**: Configure liveness and readiness probes for Kubernetes
-3. **Graceful Shutdown**: Allow sufficient time for connection draining
-4. **Monitoring**: Enable metrics and tracing for production observability
-5. **Backup**: Configure cache dump for persistence across restarts
 
 ## 📊 Monitoring & Observability
 
@@ -440,25 +362,6 @@ cargo test --lib
 cargo test --test e2e
 ```
 
-### Project Structure
-
-```
-adv-cache/
-├── src/
-│   ├── app/              # Application initialization and server setup
-│   ├── config/           # Configuration parsing and validation
-│   ├── controller/       # HTTP request handlers (cache, admin, etc.)
-│   ├── db/               # Storage layer (admission, persistence, storage)
-│   ├── http/             # HTTP client/server utilities
-│   ├── model/            # Cache entry models and serialization
-│   ├── upstream/         # Upstream proxy and backend logic
-│   ├── workers/          # Background workers (eviction, lifetime)
-│   └── tests/            # Integration and end-to-end tests
-├── cfg/                  # Configuration files
-├── api/                  # OpenAPI/Swagger specification
-└── docs/                 # Additional documentation
-```
-
 ### Benchmark Results
 
 - **Local (4-6 CPU, 1-16KB docs, 20-25GB store)**: 165k RPS steady
@@ -492,6 +395,27 @@ adv-cache/
 - **Proxy: req. weight 32kb**
 ![8](https://github.com/user-attachments/assets/ab59b0cc-b5b1-49c3-8f89-d999a73a1c70)
 
+## 🎯 Performance Tuning
+
+### Throughput Optimization
+
+1. **CPU Cores**: Set `runtime.num_cpus: 0` to use all available cores
+2. **Sharding**: Default 1024 shards provide optimal lock contention distribution
+3. **Admission Control**: Enable TinyLFU to protect hot cache set
+4. **Worker Scaling**: Adjust `eviction.replicas` and `lifetime.replicas` based on load
+
+### Memory Optimization
+
+1. **Storage Size**: Set `storage.size` based on available memory (recommended: 50-80% of total)
+2. **Object Pooling**: Enabled by default, no configuration needed
+3. **Eviction Limits**: Configure `soft_limit` (0.8) and `hard_limit` (0.99) for memory pressure handling
+
+### Latency Optimization
+
+1. **Compression**: Enable with `level: 1` for minimal CPU overhead
+2. **Upstream Timeout**: Set appropriate `timeout` and `max_timeout` values
+3. **Connection Pooling**: Configure `concurrency` for upstream connections
+4. **Tracing**: Use sampling (`sampling_rate: 0.1`) to reduce overhead
 
 ## 📄 License
 
