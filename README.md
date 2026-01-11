@@ -478,11 +478,9 @@ adv-cache/
 ![3](https://github.com/user-attachments/assets/8253b8de-9610-45f1-87e6-5ed0ec6130f0)
 
 - **Backpreasure: 1kb up to 8kb reqeusts with active eviction; hit rate: ~92%**
-  The memory limit is below the desired threshold, background eviction is actively working.
 ![4](https://github.com/user-attachments/assets/1aabffbf-bc61-40f1-9239-794fd852d973)
 
 - **Backpreasure: 1kb up to 8kb reqeusts with active eviction; hit rate: ~58%**
-  The memory limit is below the desired threshold, background eviction is actively working.
 ![6](https://github.com/user-attachments/assets/5b99b604-9fd7-47ac-be78-0cc5534b747b)
 
 
