@@ -350,14 +350,6 @@ Complete API documentation is available via Swagger/OpenAPI specification at `ap
 3. **Connection Pooling**: Configure `concurrency` for upstream connections
 4. **Tracing**: Use sampling (`sampling_rate: 0.1`) to reduce overhead
 
-### Benchmark Results
-
-- **Local (4-6 CPU, 1-16KB docs, 20-25GB store)**: 165k RPS steady
-- **Bare-metal (24 CPU, 50GB store, production traffic)**: ~300k RPS sustained
-- **Memory Overhead**: 3-4GB for 40GB of cached data
-
-> **Note**: Performance depends on workload characteristics (document size, cache hit ratio, request patterns).
-
 ## 🚢 Deployment
 
 ### Docker Deployment
@@ -465,6 +457,34 @@ adv-cache/
 ├── api/                  # OpenAPI/Swagger specification
 └── docs/                 # Additional documentation
 ```
+
+### Benchmark Results
+
+- **Local (4-6 CPU, 1-16KB docs, 20-25GB store)**: 165k RPS steady
+- **Bare-metal (24 CPU, 50GB store, production traffic)**: ~300k RPS sustained
+- **Memory Overhead**: ~64 bytes per key.
+
+> **Note**: Performance depends on workload characteristics (document size, cache hit ratio, request patterns).
+
+### Performance testing
+
+- **Small requests: 256 bytes up to 1kb; hit rate: 100%**
+![1](https://github.com/user-attachments/assets/a9bf0ec2-d4c6-4bf9-8852-df5d14a6ad0b)
+
+- **Medium requests: 1kb up to 8kb; hit rate: 100%**
+![2](https://github.com/user-attachments/assets/8deb6dfa-1b5f-4e51-a8a7-0bc8bd116461)
+
+- **Large requests: 1kb up to 16kb; hit rate: 100%**
+![3](https://github.com/user-attachments/assets/8253b8de-9610-45f1-87e6-5ed0ec6130f0)
+
+- **Backpreasure: 1kb up to 8kb reqeusts with active eviction; hit rate: ~92%**
+  The memory limit is below the desired threshold, background eviction is actively working.
+![4](https://github.com/user-attachments/assets/1aabffbf-bc61-40f1-9239-794fd852d973)
+
+- **Backpreasure: 1kb up to 8kb reqeusts with active eviction; hit rate: ~58%**
+  The memory limit is below the desired threshold, background eviction is actively working.
+![6](https://github.com/user-attachments/assets/5b99b604-9fd7-47ac-be78-0cc5534b747b)
+
 
 ## 📄 License
 
