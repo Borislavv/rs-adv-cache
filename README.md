@@ -32,14 +32,10 @@
 ## 📋 Table of Contents
 
 - [Quick Start](#-quick-start)
-- [Architecture](#-architecture)
-- [Configuration](#-configuration)
 - [API Reference](#-api-reference)
 - [Performance charts](#performance-charts)
 - [Performance Tuning](#-performance-tuning)
-- [Deployment](#-deployment)
 - [Monitoring & Observability](#-monitoring--observability)
-- [Development](#-development)
 - [License](#-license)
 
 ## 🏃 Quick Start
