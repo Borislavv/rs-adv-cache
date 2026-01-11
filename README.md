@@ -33,7 +33,7 @@
 
 - [Quick Start](#-quick-start)
 - [API Reference](#-api-reference)
-- [Performance charts](#performance-charts)
+- [Performance Charts](#performance-charts)
 - [Performance Tuning](#-performance-tuning)
 - [Monitoring & Observability](#-monitoring--observability)
 - [License](#-license)
@@ -366,7 +366,7 @@ cargo test --test e2e
 
 > **Note**: Performance depends on workload characteristics (document size, cache hit ratio, request patterns).
 
-## Performance charts
+## Performance Charts
 
 ### MacBook M2 Pro Max (12 cores, 24GB RAM)
 
