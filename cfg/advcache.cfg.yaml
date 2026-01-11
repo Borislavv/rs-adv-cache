@@ -51,7 +51,7 @@ cache:
 
   storage:
     mode: listing                 # Implementation of LRU algo through per-shard lists or Redis style sampling (values=sampling/listing).
-    size: 10737418240             # Max memory budget for storage (bytes). Here: 50 GiB.
+    size: 21474836480             # Max memory budget for storage (bytes). Here: 50 GiB.
 
   admission:
     enabled: false
@@ -70,8 +70,8 @@ cache:
 
   lifetime:
     enabled: true                 # Enable background refresh/remove for eligible entries.
-    ttl: "2h"                     # Default TTL for successful (200) responses unless overridden by rules.
-    on_ttl: refresh               # Values: 'remove' or 'refresh'. Defines behavior on TTL overcome.
+    ttl: "12h"                    # Default TTL for successful (200) responses unless overridden by rules.
+    on_ttl: remove                # Values: 'remove' or 'refresh'. Defines behavior on TTL overcome.
     beta: 0.35                    # Jitter factor (0..1) to spread refreshes/removes and prevent thundering herd.
     rate: 1000                    # Global refresh/remove QPS cap to upstreams (safety valve).
     replicas: 32                  # Number of workers (>=1).

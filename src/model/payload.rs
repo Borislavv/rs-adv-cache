@@ -13,15 +13,18 @@ impl Entry {
     /// Calculates entry size: EntryInner size + payload capacity
     /// With Bytes, capacity equals length (zero-copy immutable buffer)
     pub fn weight(&self) -> i64 {
-        // Count only EntryInner struct size (not Arc, which is just a pointer)
+        // Count EntryInner struct size (not Arc, which is just a pointer)
         let struct_size = std::mem::size_of::<crate::model::entry::EntryInner>() as i64;
-        // With Vec<u8>, len() is the actual used size, but capacity may be larger
-        // We count len() for logical weight, capacity overhead is accounted separately
+        
+        // Count Vec capacity (not len) to match actual physical memory usage
+        // capacity() reflects the actual memory allocated by the allocator, including overhead
+        // Even with shrink_to_fit(), allocator may leave capacity > len for alignment/efficiency
         let payload_guard = self.0.payload.load();
-        let payload_len = payload_guard.as_ref()
-            .map(|arc_vec| arc_vec.len())
+        let payload_capacity = payload_guard.as_ref()
+            .map(|arc_vec| arc_vec.capacity())
             .unwrap_or(0) as i64;
-        struct_size + payload_len
+        
+        struct_size + payload_capacity
     }
 
     /// Gets the estimated physical memory weight including overheads.

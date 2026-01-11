@@ -12,6 +12,7 @@ mod http;
 #[path = "k8s/probe/liveness/mod.rs"]
 mod liveness;
 mod metrics;
+mod metrics_runtime;
 mod middleware;
 mod model;
 #[path = "shared/rand/mod.rs"]
@@ -143,10 +144,17 @@ fn configure_logger(cfg: &Config) {
     }
 }
 
-#[tokio::main]
-async fn main() -> Result<()> {
+fn main() -> Result<()> {
     // Parse command-line arguments
     let args = Args::parse();
+    
+    // Now start the async runtime
+    tokio::runtime::Runtime::new()
+        .context("Failed to create tokio runtime")?
+        .block_on(async_main(args))
+}
+
+async fn async_main(args: Args) -> Result<()> {
 
     // Create cancellation token for graceful shutdown
     let shutdown_token = CancellationToken::new();
@@ -159,6 +167,10 @@ async fn main() -> Result<()> {
 
     // Configure logger (must be done after config is loaded)
     configure_logger(&cfg);
+    
+    // Initialize metrics ecosystem: install ONE global Prometheus recorder and store process collector
+    // Must be done after logger, before HTTP server starts
+    crate::metrics_runtime::init_metrics();
 
     // Optimize thread parallelism
     set_max_num_cpus(&cfg);

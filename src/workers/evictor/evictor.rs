@@ -374,12 +374,8 @@ impl Evictor {
                 }
                 _ = interval.tick() => {
                     // Log eviction statistics and update metrics
+                    // Counters are reset inside log_stats() via swap(0)
                     telemetry::log_stats(&self.name, &self.counters);
-
-                    // Reset counters after logging
-                    self.counters.evicted_items.store(0, Ordering::Relaxed);
-                    self.counters.evicted_bytes.store(0, Ordering::Relaxed);
-                    self.counters.scans_total.store(0, Ordering::Relaxed);
                 }
             }
         }
