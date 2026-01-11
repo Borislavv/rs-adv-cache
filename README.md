@@ -80,6 +80,9 @@ cargo build --release
 
 Create a `cfg/advcache.cfg.yaml` file with the following setup:
 
+<details>
+<summary>Click to expand configuration example</summary>
+
 ```yaml
 cache:
   env: "prod"                    # Runtime environment label (e.g., dev/stage/prod). Used for logs/metrics tagging.
@@ -216,6 +219,8 @@ cache:
           - Cache-Control
           - X-Error-Reason
 ```
+
+</details>
 
 ## 🏗️ Architecture
 
