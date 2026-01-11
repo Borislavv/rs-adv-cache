@@ -12,6 +12,7 @@
 - **Sharded Storage**: 1024 shards with per-shard LRU for optimal lock contention reduction
 
 ### Advanced Caching
+- **Realtime Cache Invalidation**: Implements through API endpoint.
 - **TinyLFU Admission Control**: Intelligent cache admission using Count-Min Sketch and Doorkeeper
 - **Background Refresh**: Automatic TTL-based cache refresh without blocking requests
 - **Flexible Cache Keys**: Configurable query parameters and headers for precise cache control
