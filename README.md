@@ -35,7 +35,7 @@
 - [Architecture](#-architecture)
 - [Configuration](#-configuration)
 - [API Reference](#-api-reference)
-- [Performance charts](#-performance-charts)
+- [Performance charts](#performance-charts)
 - [Performance Tuning](#-performance-tuning)
 - [Deployment](#-deployment)
 - [Monitoring & Observability](#-monitoring--observability)
