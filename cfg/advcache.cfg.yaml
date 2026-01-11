@@ -85,7 +85,7 @@ cache:
     endpoint: "localhost:4318"    # ignores when exporter=stdout
     insecure: true                # should use TLS?
     sampling_mode: "always"       # off | always | ratio
-    sampling_rate: 1.0            # 10% head-sampling (используется при mode=ratio)
+    sampling_rate: 1.0            # Sampling rate (used when mode=ratio)
     export_batch_size: 512
     export_batch_timeout: "3s"
     export_max_queue: 1024
