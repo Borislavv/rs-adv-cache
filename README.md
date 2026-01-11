@@ -483,6 +483,12 @@ adv-cache/
 - **Backpreasure: 1kb up to 8kb reqeusts with active eviction; hit rate: ~58%**
 ![6](https://github.com/user-attachments/assets/5b99b604-9fd7-47ac-be78-0cc5534b747b)
 
+- **Proxy: req. weight  4kb**
+![7](https://github.com/user-attachments/assets/057dad24-8caa-4e50-b7fd-17b4a618757d)
+
+- **Proxy: req. weight 32kb**
+![8](https://github.com/user-attachments/assets/ab59b0cc-b5b1-49c3-8f89-d999a73a1c70)
+
 
 ## 📄 License
 
