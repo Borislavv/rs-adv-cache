@@ -37,6 +37,7 @@
 - [Performance Charts](#performance-charts)
 - [Performance Tuning](#-performance-tuning)
 - [Monitoring & Observability](#-monitoring--observability)
+- [Development](#-development)
 - [License](#-license)
 
 ## 🏃 Quick Start
