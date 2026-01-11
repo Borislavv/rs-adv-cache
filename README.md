@@ -35,6 +35,7 @@
 - [Architecture](#-architecture)
 - [Configuration](#-configuration)
 - [API Reference](#-api-reference)
+- [Performance charts](#-performance-charts)
 - [Performance Tuning](#-performance-tuning)
 - [Deployment](#-deployment)
 - [Monitoring & Observability](#-monitoring--observability)
@@ -466,7 +467,9 @@ adv-cache/
 
 > **Note**: Performance depends on workload characteristics (document size, cache hit ratio, request patterns).
 
-### Performance testing
+## Performance charts
+
+### MacBook M2 Pro Max (12 cores, 24GB RAM)
 
 - **Small requests: 256 bytes up to 1kb; hit rate: 100%**
 ![1](https://github.com/user-attachments/assets/a9bf0ec2-d4c6-4bf9-8852-df5d14a6ad0b)
