@@ -24,7 +24,7 @@
   "description": "AdvanceCache - HTTP cache / reverse proxy.",
   "editable": true,
   "fiscalYearStartMonth": 0,
-  "graphTooltip": 1,
+  "graphTooltip": 2,
   "id": 1,
   "links": [
     {
@@ -105,7 +105,7 @@
         "overrides": []
       },
       "gridPos": {
-        "h": 8,
+        "h": 6,
         "w": 12,
         "x": 0,
         "y": 0
@@ -260,7 +260,7 @@
               "options": {
                 "mode": "exclude",
                 "names": [
-                  "dur - 5m"
+                  "dur - 1m"
                 ],
                 "prefix": "All except:",
                 "readOnly": true
@@ -280,7 +280,7 @@
         ]
       },
       "gridPos": {
-        "h": 8,
+        "h": 6,
         "w": 12,
         "x": 12,
         "y": 0
@@ -414,10 +414,10 @@
         "overrides": []
       },
       "gridPos": {
-        "h": 8,
+        "h": 6,
         "w": 12,
         "x": 0,
-        "y": 8
+        "y": 6
       },
       "id": 100,
       "options": {
@@ -520,7 +520,7 @@
               "options": {
                 "mode": "exclude",
                 "names": [
-                  "Hit rate (%) - 5min"
+                  "Hit rate (%) - 1min"
                 ],
                 "prefix": "All except:",
                 "readOnly": true
@@ -540,10 +540,10 @@
         ]
       },
       "gridPos": {
-        "h": 8,
+        "h": 6,
         "w": 12,
         "x": 12,
-        "y": 8
+        "y": 6
       },
       "id": 94,
       "options": {
@@ -702,10 +702,10 @@
         "overrides": []
       },
       "gridPos": {
-        "h": 8,
+        "h": 7,
         "w": 6,
         "x": 0,
-        "y": 16
+        "y": 12
       },
       "id": 7,
       "options": {
@@ -800,10 +800,10 @@
         "overrides": []
       },
       "gridPos": {
-        "h": 8,
+        "h": 7,
         "w": 6,
         "x": 6,
-        "y": 16
+        "y": 12
       },
       "id": 6,
       "options": {
@@ -815,7 +815,7 @@
         },
         "tooltip": {
           "hideZeros": false,
-          "mode": "single",
+          "mode": "multi",
           "sort": "none"
         }
       },
@@ -924,10 +924,10 @@
         "overrides": []
       },
       "gridPos": {
-        "h": 8,
+        "h": 7,
         "w": 12,
         "x": 12,
-        "y": 16
+        "y": 12
       },
       "id": 61,
       "options": {
@@ -959,7 +959,7 @@
           "expr": "rate(process_cpu_seconds_total[1m])",
           "hide": false,
           "instant": false,
-          "legendFormat": "__auto",
+          "legendFormat": "CPU usage (sec)",
           "range": true,
           "refId": "B"
         }
@@ -1024,13 +1024,38 @@
             ]
           }
         },
-        "overrides": []
+        "overrides": [
+          {
+            "__systemRef": "hideSeriesFrom",
+            "matcher": {
+              "id": "byNames",
+              "options": {
+                "mode": "exclude",
+                "names": [
+                  "soft: evicted"
+                ],
+                "prefix": "All except:",
+                "readOnly": true
+              }
+            },
+            "properties": [
+              {
+                "id": "custom.hideFrom",
+                "value": {
+                  "legend": false,
+                  "tooltip": false,
+                  "viz": true
+                }
+              }
+            ]
+          }
+        ]
       },
       "gridPos": {
-        "h": 8,
+        "h": 6,
         "w": 12,
         "x": 0,
-        "y": 24
+        "y": 19
       },
       "id": 5,
       "options": {
@@ -1054,7 +1079,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "rate(soft_evicted_total_items[15s])",
+          "expr": "rate(soft_evicted_total_items[1m])",
           "instant": false,
           "legendFormat": "soft: evicted",
           "range": true,
@@ -1066,7 +1091,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "rate(soft_evicted_total_bytes[15s])",
+          "expr": "rate(soft_evicted_total_bytes[1m])",
           "hide": false,
           "instant": false,
           "legendFormat": "soft: bytes freed",
@@ -1079,7 +1104,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "rate(soft_evicted_total_scans[15s])",
+          "expr": "rate(soft_evicted_total_scans[1m])",
           "hide": false,
           "instant": false,
           "legendFormat": "soft: scans",
@@ -1092,7 +1117,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "rate(hard_evicted_total_items[15s])",
+          "expr": "rate(hard_evicted_total_items[1m])",
           "hide": false,
           "instant": false,
           "legendFormat": "hard: evicted",
@@ -1105,7 +1130,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "rate(hard_evicted_total_bytes[15s])",
+          "expr": "rate(hard_evicted_total_bytes[1m])",
           "hide": false,
           "instant": false,
           "legendFormat": "hard: bytes freed",
@@ -1118,7 +1143,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "rate(admission_allowed[15s])",
+          "expr": "rate(admission_allowed[1m])",
           "hide": false,
           "instant": false,
           "legendFormat": "admission: allowed",
@@ -1202,10 +1227,10 @@
         "overrides": []
       },
       "gridPos": {
-        "h": 8,
+        "h": 6,
         "w": 12,
         "x": 12,
-        "y": 24
+        "y": 19
       },
       "id": 104,
       "options": {
@@ -1292,7 +1317,7 @@
       "type": "timeseries"
     }
   ],
-  "refresh": false,
+  "refresh": "5s",
   "schemaVersion": 38,
   "tags": [
     "common",
@@ -1321,13 +1346,13 @@
     ]
   },
   "time": {
-    "from": "2026-01-10T07:13:51.223Z",
-    "to": "2026-01-10T07:21:15.260Z"
+    "from": "now-1h",
+    "to": "now"
   },
   "timepicker": {},
   "timezone": "",
   "title": "AdvCache Metrics",
   "uid": "advcache-main",
-  "version": 35,
+  "version": 40,
   "weekStart": ""
 }
